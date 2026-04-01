@@ -411,7 +411,7 @@ else:
 
 
 # ─────────────────────────────────────────────────────────
-#  회원 등록 / 수정 폼 (사이드바)
+#  회원 등록 / 수정 폼 (메인 화면 인라인)
 # ─────────────────────────────────────────────────────────
 if st.session_state.show_form:
     edit_id = st.session_state.edit_id
@@ -421,25 +421,57 @@ if st.session_state.show_form:
         if not rows.empty:
             existing = rows.iloc[0].to_dict()
 
-    with st.sidebar:
-        st.markdown(f"### {'✏️ 회원 수정' if existing else '➕ 새 회원 등록'}")
-        st.markdown("---")
+    st.markdown("---")
+    st.markdown(f"### {'✏️ 회원 정보 수정' if existing else '➕ 새 회원 등록'}")
 
-        with st.form("member_form", clear_on_submit=False):
-            cat = st.selectbox("구분 *", CATEGORIES,
-                               index=CATEGORIES.index(existing["category"]) if existing else 6)
-            col_n, col_g = st.columns(2)
-            name   = col_n.text_input("성명 *", value=existing["name"] if existing else "")
-            gender = col_g.selectbox("성별 *", ["남","여"],
-                                     index=0 if not existing else (0 if existing["gender"]=="남" else 1))
+    with st.form("member_form", clear_on_submit=True):
 
-            cafe_id    = st.text_input("카페ID", value=existing["cafe_id"] if existing else "")
-            birth_year = st.number_input("생년 (YYYY)", min_value=1940, max_value=2010,
-                                         value=int(existing["birth_year"]) if existing and existing.get("birth_year") else 1990)
-            phone      = st.text_input("연락처", value=existing["phone"] if existing else "",
-                                       placeholder="010-0000-0000")
-            email      = st.text_input("이메일", value=existing["email"] if existing else "")
+        # ── 1행: 구분 / 성명 / 성별 ──────────────────────────
+        c1, c2, c3 = st.columns([1, 1, 1])
+        with c1:
+            cat = st.selectbox(
+                "구분 *",
+                CATEGORIES,
+                index=CATEGORIES.index(existing["category"]) if existing else 6,
+            )
+        with c2:
+            name = st.text_input(
+                "성명 *",
+                value=existing["name"] if existing else "",
+                placeholder="홍길동",
+            )
+        with c3:
+            gender = st.selectbox(
+                "성별 *",
+                ["남", "여"],
+                index=0 if not existing else (0 if existing["gender"] == "남" else 1),
+            )
 
+        # ── 2행: 카페ID / 생년 / 연락처 ──────────────────────
+        c4, c5, c6 = st.columns([1, 1, 1])
+        with c4:
+            cafe_id = st.text_input(
+                "카페ID",
+                value=existing["cafe_id"] if existing else "",
+                placeholder="cafe_id",
+            )
+        with c5:
+            birth_year = st.text_input(
+                "생년 (YYYY)",
+                value=str(existing["birth_year"]) if existing and existing.get("birth_year") else "",
+                placeholder="1990",
+                max_chars=4,
+            )
+        with c6:
+            phone = st.text_input(
+                "연락처",
+                value=existing["phone"] if existing else "",
+                placeholder="010-0000-0000",
+            )
+
+        # ── 3행: 입회일 / 이메일 ─────────────────────────────
+        c7, c8 = st.columns([1, 2])
+        with c7:
             join_date_val = None
             if existing and existing.get("join_date"):
                 try:
@@ -447,11 +479,22 @@ if st.session_state.show_form:
                 except Exception:
                     pass
             join_date = st.date_input("입회일", value=join_date_val or date.today())
+        with c8:
+            email = st.text_input(
+                "이메일",
+                value=existing["email"] if existing else "",
+                placeholder="example@email.com",
+            )
 
-            dormant = st.text_input("휴면 기간",
-                                    value=existing["dormant_period"] if existing else "",
-                                    placeholder="예: 2024-01-01~2024-12-31")
-
+        # ── 4행: 휴면기간 / 탈퇴일 ───────────────────────────
+        c9, c10 = st.columns([1, 1])
+        with c9:
+            dormant = st.text_input(
+                "휴면 기간",
+                value=existing["dormant_period"] if existing else "",
+                placeholder="예: 2024-01-01~2024-12-31",
+            )
+        with c10:
             leave_date_val = None
             if existing and existing.get("leave_date"):
                 try:
@@ -460,36 +503,55 @@ if st.session_state.show_form:
                     pass
             leave_date = st.date_input("탈퇴일 (탈퇴 시만)", value=leave_date_val)
 
-            memo = st.text_area("메모", value=existing["memo"] if existing else "")
+        # ── 5행: 메모 ─────────────────────────────────────────
+        memo = st.text_area(
+            "메모",
+            value=existing["memo"] if existing else "",
+            placeholder="특이사항, 역할 등 자유 기재",
+            height=80,
+        )
 
-            submitted = st.form_submit_button("💾 저장", type="primary", use_container_width=True)
+        # ── 버튼 ──────────────────────────────────────────────
+        btn_save, btn_cancel, _ = st.columns([1, 1, 4])
+        submitted = btn_save.form_submit_button("💾 저장", type="primary", use_container_width=True)
+        cancelled = btn_cancel.form_submit_button("✕ 취소", use_container_width=True)
 
-        if st.button("✕ 닫기", use_container_width=True):
+    # 취소
+    if cancelled:
+        st.session_state.show_form = False
+        st.rerun()
+
+    # 저장
+    if submitted:
+        if not name.strip():
+            st.error("❗ 성명은 필수입니다.")
+        else:
+            # 생년 숫자 변환
+            by = None
+            if birth_year.strip():
+                try:
+                    by = int(birth_year.strip())
+                except ValueError:
+                    by = None
+
+            row_data = {
+                "id":             existing["id"] if existing else next_id(df),
+                "category":       cat,
+                "name":           name.strip(),
+                "cafe_id":        cafe_id.strip(),
+                "birth_year":     by or "",
+                "gender":         gender,
+                "phone":          phone.strip(),
+                "join_date":      join_date.strftime("%Y-%m-%d") if join_date else "",
+                "dormant_period": dormant.strip(),
+                "leave_date":     leave_date.strftime("%Y-%m-%d") if leave_date else "",
+                "email":          email.strip(),
+                "memo":           memo.strip(),
+            }
+            with st.spinner("구글 시트에 저장 중…"):
+                save_row(df, row_data, is_new=(existing is None))
+
+            st.success(f"✅ {'수정' if existing else '등록'} 완료! — {cat} {name.strip()}")
             st.session_state.show_form = False
+            st.cache_resource.clear()
             st.rerun()
-
-        if submitted:
-            if not name.strip():
-                st.error("성명은 필수입니다.")
-            else:
-                row_data = {
-                    "id":             existing["id"] if existing else next_id(df),
-                    "category":       cat,
-                    "name":           name.strip(),
-                    "cafe_id":        cafe_id.strip(),
-                    "birth_year":     birth_year,
-                    "gender":         gender,
-                    "phone":          phone.strip(),
-                    "join_date":      join_date.strftime("%Y-%m-%d") if join_date else "",
-                    "dormant_period": dormant.strip(),
-                    "leave_date":     leave_date.strftime("%Y-%m-%d") if leave_date else "",
-                    "email":          email.strip(),
-                    "memo":           memo.strip(),
-                }
-                with st.spinner("구글 시트에 저장 중…"):
-                    save_row(df, row_data, is_new=(existing is None))
-
-                st.success("✅ 저장 완료!")
-                st.session_state.show_form = False
-                st.cache_resource.clear()
-                st.rerun()
