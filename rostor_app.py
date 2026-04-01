@@ -274,7 +274,7 @@ st.session_state.filter_cat = filter_cat
 
 sort_col_w, _ = st.columns([1, 5])
 with sort_col_w:
-    sort_by = st.selectbox("정렬", ["No.순","구분순","이름순","입회일순"],
+    sort_by = st.selectbox("정렬", ["No.순","구분순","이름순","입회일순","탈퇴일순","생년순","성별순"],
                            label_visibility="collapsed")
 
 # ─────────────────────────────────────────────────────────
@@ -305,6 +305,12 @@ def apply_filters(data: pd.DataFrame) -> pd.DataFrame:
         data = data.sort_values("name")
     elif sort_by == "입회일순":
         data = data.sort_values("join_date")
+    elif sort_by == "탈퇴일순":
+        data = data.sort_values("leave_date")
+    elif sort_by == "생년순":
+        data = data.sort_values("birth_year")
+    elif sort_by == "성별순":
+        data = data.sort_values("gender")
     else:
         data = data.sort_values("id")
     return data.reset_index(drop=True)
@@ -315,8 +321,8 @@ st.caption(f"검색 결과 **{len(view_df)}명** / 전체 {len(df)}명")
 # ─────────────────────────────────────────────────────────
 #  회원 목록 테이블 — 메모 컬럼 포함
 # ─────────────────────────────────────────────────────────
-COL_W = [0.35, 0.8, 0.9, 1.0, 0.55, 0.45, 1.1, 0.85, 1.5, 0.8]
-HDR   = ["No.","구분","성명","카페ID","생년","성별","연락처","입회일","메모","관리"]
+COL_W = [0.3, 0.7, 0.85, 0.9, 0.5, 0.4, 1.0, 0.8, 1.1, 0.8, 1.2, 0.75]
+HDR   = ["No.","구분","성명","카페ID","생년","성별","연락처","입회일","휴면기간","탈퇴일","메모","관리"]
 
 if view_df.empty:
     st.info("🎾 해당 조건의 회원이 없습니다.")
@@ -342,9 +348,11 @@ else:
         rcols[5].markdown(f"<div style='padding:6px 0'>{gender_html(str(row.get('gender','')))}</div>", unsafe_allow_html=True)
         rcols[6].markdown(f"<div style='padding:8px 0;font-size:12px'>{row.get('phone','') or '—'}</div>", unsafe_allow_html=True)
         rcols[7].markdown(f"<div style='padding:8px 0;font-size:12px;color:#6b7280'>{row.get('join_date','') or '—'}</div>", unsafe_allow_html=True)
-        rcols[8].markdown(f"<div style='padding:8px 0;font-size:12px;color:#4b5563' title='{memo_txt}'>{memo_display}</div>", unsafe_allow_html=True)
+        rcols[8].markdown(f"<div style='padding:8px 0;font-size:11px;color:#ca8a04'>{row.get('dormant_period','') or '—'}</div>", unsafe_allow_html=True)
+        rcols[9].markdown(f"<div style='padding:8px 0;font-size:12px;color:#dc2626'>{row.get('leave_date','') or '—'}</div>", unsafe_allow_html=True)
+        rcols[10].markdown(f"<div style='padding:8px 0;font-size:12px;color:#4b5563' title='{memo_txt}'>{memo_display}</div>", unsafe_allow_html=True)
 
-        btn_c1, btn_c2 = rcols[9].columns(2)
+        btn_c1, btn_c2 = rcols[11].columns(2)
         if btn_c1.button("수정", key=f"edit_{row['id']}", use_container_width=True):
             st.session_state.pending_action = {"type":"edit","id":int(row["id"]),"name":row["name"]}
             st.session_state.admin_verified = False
