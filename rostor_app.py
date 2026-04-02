@@ -288,38 +288,36 @@ def dialog_form(existing=None):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── 버튼: inline style injection으로 색상 강제 적용 ──
-    # ── 버튼 색상 (텍스트 기반 CSS + JS 강제 적용) ──
+    # ── 버튼 색상: key 속성 기반 CSS (가장 확실) ──
+    # Streamlit은 button에 aria-label=key 를 설정함
     st.markdown("""
     <style>
-    /* 저장=파란색 (primary) */
-    div[data-testid="stDialog"] button[data-testid="stBaseButton-primary"]{
-        background:#2563eb!important;color:#fff!important;border:none!important;
+    /* 저장 버튼 */
+    button[aria-label="form_save"],
+    button[data-testid="stBaseButton-primary"] {
+        background: #2563eb !important;
+        color: #fff !important;
+        border: none !important;
     }
-    /* 취소=회색, 삭제=빨간색 구분: nth-of-type */
-    div[data-testid="stDialog"] button[data-testid="stBaseButton-secondary"]{
-        background:#6b7280!important;color:#fff!important;border:none!important;
+    /* 취소 버튼 */
+    button[aria-label="form_cancel"] {
+        background: #6b7280 !important;
+        color: #fff !important;
+        border: none !important;
+    }
+    /* 삭제 버튼 */
+    button[aria-label="form_delete"] {
+        background: #ef4444 !important;
+        color: #fff !important;
+        border: none !important;
+    }
+    button[aria-label="form_delete"]:hover {
+        background: #dc2626 !important;
+    }
+    button[aria-label="form_cancel"]:hover {
+        background: #4b5563 !important;
     }
     </style>
-    <script>
-    (function applyColors(){
-        const d = window.parent.document;
-        function paint(){
-            const btns = Array.from(d.querySelectorAll(
-                'div[data-testid="stDialog"] button[data-testid="stBaseButton-secondary"]'));
-            btns.forEach((b, i) => {
-                // 마지막 secondary 버튼 = 삭제 → 빨간색, 나머지 = 회색
-                const isDelete = (i === btns.length - 1) && btns.length > 1;
-                const bg = isDelete ? '#ef4444' : '#6b7280';
-                b.style.setProperty('background', bg, 'important');
-                b.style.setProperty('color', '#fff', 'important');
-                b.style.setProperty('border', 'none', 'important');
-            });
-        }
-        paint();
-        new MutationObserver(paint).observe(d.body, {childList:true, subtree:true});
-    })();
-    </script>
     """, unsafe_allow_html=True)
 
     if existing:
