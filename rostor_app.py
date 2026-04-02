@@ -82,6 +82,7 @@ button[data-testid="baseButton-secondary"][title*="수정"] { background:#fbbf24
 div.edit-col button { background-color:#fbbf24 !important; color:#1a2e4a !important; border:none !important; font-size:12px !important; font-weight:700 !important; }
 div.edit-col button:hover { background-color:#f59e0b !important; }
 /* 삭제 버튼 = 빨간색 */
+div[data-testid="stForm"] button:last-child { background-color:#ef4444 !important; color:#fff !important; border:none !important; }
 div.del-col button  { background-color:#ef4444 !important; color:#ffffff !important; border:none !important; font-size:12px !important; font-weight:700 !important; }
 div.del-col button:hover  { background-color:#dc2626 !important; }
 
@@ -287,13 +288,27 @@ def dialog_form(existing=None):
                 value=existing["memo"] if existing else "",
                 placeholder="특이사항, 역할 등 자유 기재", height=80)
 
-        bs, bc = st.columns([1,1])
-        submitted = bs.form_submit_button("💾 저장", type="primary", use_container_width=True)
-        cancelled = bc.form_submit_button("✕ 취소",  use_container_width=True)
+        if existing:
+            bs, bc, bd = st.columns([1,1,1])
+            submitted = bs.form_submit_button("💾 저장", type="primary", use_container_width=True)
+            cancelled = bc.form_submit_button("✕ 취소", use_container_width=True)
+            delete_req = bd.form_submit_button("🗑️ 삭제", use_container_width=True)
+        else:
+            bs, bc = st.columns([1,1])
+            submitted = bs.form_submit_button("💾 저장", type="primary", use_container_width=True)
+            cancelled = bc.form_submit_button("✕ 취소", use_container_width=True)
+            delete_req = False
 
     if cancelled:
         st.session_state.open_dialog   = None
         st.session_state.edit_target   = None
+        st.session_state.pw_verified_id = None
+        st.rerun()
+
+    if delete_req and existing:
+        # 삭제 요청 → 비밀번호 재확인 팝업으로 이동
+        st.session_state.open_dialog   = "pw_delete"
+        st.session_state.edit_target   = {"type":"delete","id":existing["id"],"name":existing["name"]}
         st.session_state.pw_verified_id = None
         st.rerun()
 
@@ -436,7 +451,8 @@ if st.session_state.filter_cat not in FILTER_OPTIONS:
     st.session_state.filter_cat = "전체"
 filter_cat = st.radio("필터", FILTER_OPTIONS,
     index=FILTER_OPTIONS.index(st.session_state.filter_cat),
-    horizontal=True, label_visibility="collapsed")
+    horizontal=True, label_visibility="collapsed",
+    key="filter_radio")
 st.session_state.filter_cat = filter_cat
 
 sc2,_ = st.columns([1,5])
@@ -480,8 +496,8 @@ st.caption(f"검색 결과 **{len(view_df)}명** / 전체 {len(df)}명")
 # ─────────────────────────────────────────────────────────
 #  회원 목록 테이블
 # ─────────────────────────────────────────────────────────
-CW  = [0.28, 0.65, 0.82, 0.85, 0.46, 0.38, 0.95, 0.72, 0.75, 1.0, 0.72, 0.68, 1.1, 0.55, 0.55]
-HDR = ["No.","구분","성명","카페ID","생년","성별","연락처","거주지","입회일","휴면기간","탈퇴일","입회신청서","메모","수정","삭제"]
+CW  = [0.28, 0.65, 0.82, 0.85, 0.46, 0.38, 0.95, 0.72, 0.75, 1.0, 0.72, 0.68, 1.1, 0.6]
+HDR = ["No.","구분","성명","카페ID","생년","성별","연락처","거주지","입회일","휴면기간","탈퇴일","입회신청서","메모","관리"]
 
 if view_df.empty:
     st.info("🎾 해당 조건의 회원이 없습니다.")
@@ -519,14 +535,6 @@ else:
             if st.button("✏️ 수정", key=f"edit_{row['id']}", use_container_width=True):
                 st.session_state.open_dialog   = "pw_edit"
                 st.session_state.edit_target   = {"type":"edit","id":int(row["id"]),"name":row["name"]}
-                st.session_state.pw_verified_id = None
-                st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
-        with rc[14]:
-            st.markdown("<div class='del-col'>", unsafe_allow_html=True)
-            if st.button("🗑️ 삭제", key=f"del_{row['id']}", use_container_width=True):
-                st.session_state.open_dialog   = "pw_delete"
-                st.session_state.edit_target   = {"type":"delete","id":int(row["id"]),"name":row["name"]}
                 st.session_state.pw_verified_id = None
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
