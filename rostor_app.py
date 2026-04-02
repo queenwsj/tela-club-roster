@@ -25,7 +25,7 @@ SCOPES = [
 COLUMNS = [
     "id", "category", "name", "cafe_id", "birth_year", "gender",
     "phone", "join_date", "dormant_period", "leave_date",
-    "email", "application", "memo", "updated_at",
+    "email", "application", "region", "memo", "updated_at",
 ]
 CATEGORIES   = ["마스터","고문","회장","총무","경기이사","홍보이사","정회원","휴면","탈퇴"]
 CAT_ORDER    = {c: i for i, c in enumerate(CATEGORIES)}
@@ -214,8 +214,8 @@ def dialog_form(existing=None):
             gender = st.selectbox("성별 *", ["남","여"],
                 index=0 if not existing else (0 if existing["gender"]=="남" else 1))
 
-        # 행2: 카페ID / 생년 / 연락처
-        c4,c5,c6 = st.columns([1,1,1])
+        # 행2: 카페ID / 생년 / 연락처 / 거주지
+        c4,c5,c6,c6b = st.columns([1,1,1,1])
         with c4:
             cafe_id = st.text_input("카페ID",
                 value=existing["cafe_id"] if existing else "", placeholder="cafe_id")
@@ -228,6 +228,9 @@ def dialog_form(existing=None):
         with c6:
             phone = st.text_input("연락처",
                 value=existing["phone"] if existing else "", placeholder="010-0000-0000")
+        with c6b:
+            region = st.text_input("거주지",
+                value=existing["region"] if existing else "", placeholder="서울 강남구")
 
         # 행3: 입회일 / 이메일
         c7,c8 = st.columns([1,2])
@@ -303,6 +306,7 @@ def dialog_form(existing=None):
                 "leave_date":     ld_str,
                 "email":          email.strip(),
                 "application":    "" if application=="—" else application,
+                "region":         region.strip(),
                 "memo":           memo.strip(),
             }
             with st.spinner("구글 시트에 저장 중…"):
@@ -421,6 +425,7 @@ sc2,_ = st.columns([1,5])
 with sc2:
     sort_by = st.selectbox("정렬",
         ["No.순","구분순","이름순","입회일순","탈퇴일순","생년순","성별순"],
+        index=1,
         label_visibility="collapsed")
 
 # ─────────────────────────────────────────────────────────
@@ -430,7 +435,11 @@ def apply_filters(data):
     if data.empty: return data
     if filter_cat == "운영진":
         data = data[data["category"].isin(OFFICER_CATS)]
-    elif filter_cat != "전체":
+    elif filter_cat == "탈퇴":
+        data = data[data["category"] == "탈퇴"]
+    elif filter_cat == "전체":
+        data = data[data["category"] != "탈퇴"]   # 전체에서 탈퇴 제외
+    else:
         data = data[data["category"] == filter_cat]
     q = st.session_state.search_active.lower()
     if q:
@@ -453,8 +462,8 @@ st.caption(f"검색 결과 **{len(view_df)}명** / 전체 {len(df)}명")
 # ─────────────────────────────────────────────────────────
 #  회원 목록 테이블
 # ─────────────────────────────────────────────────────────
-CW  = [0.28, 0.68, 0.85, 0.88, 0.48, 0.4, 1.0, 0.78, 1.05, 0.75, 0.72, 1.15, 0.72]
-HDR = ["No.","구분","성명","카페ID","생년","성별","연락처","입회일","휴면기간","탈퇴일","입회신청서","메모","관리"]
+CW  = [0.28, 0.65, 0.82, 0.85, 0.46, 0.38, 0.95, 0.72, 0.75, 1.0, 0.72, 0.68, 1.1, 0.7]
+HDR = ["No.","구분","성명","카페ID","생년","성별","연락처","거주지","입회일","휴면기간","탈퇴일","입회신청서","메모","관리"]
 
 if view_df.empty:
     st.info("🎾 해당 조건의 회원이 없습니다.")
@@ -480,13 +489,14 @@ else:
         rc[4].markdown(cell(by_val), unsafe_allow_html=True)
         rc[5].markdown(f"<div style='padding:5px 0'>{gender_html(str(row.get('gender','')))}</div>", unsafe_allow_html=True)
         rc[6].markdown(cell(row.get('phone','') or '—'), unsafe_allow_html=True)
-        rc[7].markdown(cell(row.get('join_date','') or '—',"#6b7280"), unsafe_allow_html=True)
-        rc[8].markdown(cell(row.get('dormant_period','') or '—',"#ca8a04"), unsafe_allow_html=True)
-        rc[9].markdown(cell(row.get('leave_date','') or '—',"#dc2626"), unsafe_allow_html=True)
-        rc[10].markdown(f"<div style='padding:5px 0'><span style='{FS};font-weight:700;color:{app_color}'>{app_val}</span></div>", unsafe_allow_html=True)
-        rc[11].markdown(f"<div style='padding:7px 0;{FS};color:#4b5563' title='{memo_txt}'>{memo_disp}</div>", unsafe_allow_html=True)
+        rc[7].markdown(cell(row.get('region','') or '—',"#374151"), unsafe_allow_html=True)
+        rc[8].markdown(cell(row.get('join_date','') or '—',"#6b7280"), unsafe_allow_html=True)
+        rc[9].markdown(cell(row.get('dormant_period','') or '—',"#ca8a04"), unsafe_allow_html=True)
+        rc[10].markdown(cell(row.get('leave_date','') or '—',"#dc2626"), unsafe_allow_html=True)
+        rc[11].markdown(f"<div style='padding:5px 0'><span style='{FS};font-weight:700;color:{app_color}'>{app_val}</span></div>", unsafe_allow_html=True)
+        rc[12].markdown(f"<div style='padding:7px 0;{FS};color:#4b5563' title='{memo_txt}'>{memo_disp}</div>", unsafe_allow_html=True)
 
-        b1,b2 = rc[12].columns(2)
+        b1,b2 = rc[13].columns(2)
         if b1.button("수정", key=f"edit_{row['id']}", use_container_width=True):
             st.session_state.open_dialog   = "pw_edit"
             st.session_state.edit_target   = {"type":"edit","id":int(row["id"]),"name":row["name"]}
