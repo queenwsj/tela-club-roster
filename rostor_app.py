@@ -10,7 +10,7 @@ import pandas as pd
 from datetime import datetime, date
 
 st.set_page_config(
-    page_title="테라클럽 회원 명부 v1.00",
+    page_title="테라클럽 회원 명부",
     page_icon="🎾",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -217,116 +217,112 @@ def dialog_form(existing=None):
     title = "✏️ 회원 정보 수정" if existing else "➕ 새 회원 등록"
     st.markdown(f"#### {title}")
 
-    with st.form("member_form", clear_on_submit=False):
-        # 행1: 구분 / 성명 / 성별
-        c1,c2,c3 = st.columns([1,1,1])
-        with c1:
-            cat = st.selectbox("구분 *", CATEGORIES,
-                index=CATEGORIES.index(existing["category"]) if existing else 6)
-        with c2:
-            name = st.text_input("성명 *",
-                value=existing["name"] if existing else "", placeholder="홍길동")
-        with c3:
-            gender = st.selectbox("성별 *", ["남","여"],
-                index=0 if not existing else (0 if existing["gender"]=="남" else 1))
+    # 행1: 구분 / 성명 / 성별
+    c1,c2,c3 = st.columns([1,1,1])
+    with c1:
+        cat = st.selectbox("구분 *", CATEGORIES,
+            index=CATEGORIES.index(existing["category"]) if existing else 6)
+    with c2:
+        name = st.text_input("성명 *",
+            value=existing["name"] if existing else "", placeholder="홍길동")
+    with c3:
+        gender = st.selectbox("성별 *", ["남","여"],
+            index=0 if not existing else (0 if existing["gender"]=="남" else 1))
 
-        # 행2: 카페ID / 생년 / 연락처 / 거주지
-        c4,c5,c6,c6b = st.columns([1,1,1,1])
-        with c4:
-            cafe_id = st.text_input("카페ID",
-                value=existing["cafe_id"] if existing else "", placeholder="cafe_id")
-        with c5:
-            by_v = ""
-            if existing and existing.get("birth_year"):
-                try: by_v = str(int(existing["birth_year"]))
-                except: pass
-            birth_year = st.text_input("생년 (YYYY)", value=by_v, placeholder="1990", max_chars=4)
-        with c6:
-            phone = st.text_input("연락처",
-                value=existing["phone"] if existing else "", placeholder="010-0000-0000")
-        with c6b:
-            region = st.text_input("거주지",
-                value=existing["region"] if existing else "", placeholder="서울 강남구")
+    # 행2: 카페ID / 생년 / 연락처 / 거주지
+    c4,c5,c6,c6b = st.columns([1,1,1,1])
+    with c4:
+        cafe_id = st.text_input("카페ID",
+            value=existing["cafe_id"] if existing else "", placeholder="cafe_id")
+    with c5:
+        by_v = ""
+        if existing and existing.get("birth_year"):
+            try: by_v = str(int(existing["birth_year"]))
+            except: pass
+        birth_year = st.text_input("생년 (YYYY)", value=by_v, placeholder="1990", max_chars=4)
+    with c6:
+        phone = st.text_input("연락처",
+            value=existing["phone"] if existing else "", placeholder="010-0000-0000")
+    with c6b:
+        region = st.text_input("거주지",
+            value=existing["region"] if existing else "", placeholder="서울 강남구")
 
-        # 행3: 입회일 / 이메일
-        c7,c8 = st.columns([1,2])
-        with c7:
-            jd_val = None
-            if existing and existing.get("join_date"):
-                try: jd_val = datetime.strptime(str(existing["join_date"]),"%Y-%m-%d").date()
-                except: pass
-            join_date = st.date_input("입회일", value=jd_val or date.today())
-        with c8:
-            email = st.text_input("이메일",
-                value=existing["email"] if existing else "", placeholder="example@email.com")
+    # 행3: 입회일 / 이메일
+    c7,c8 = st.columns([1,2])
+    with c7:
+        jd_val = None
+        if existing and existing.get("join_date"):
+            try: jd_val = datetime.strptime(str(existing["join_date"]),"%Y-%m-%d").date()
+            except: pass
+        join_date = st.date_input("입회일", value=jd_val or date.today())
+    with c8:
+        email = st.text_input("이메일",
+            value=existing["email"] if existing else "", placeholder="example@email.com")
 
-        # 행4: 휴면기간 / 탈퇴일
-        c9,c10 = st.columns([1,1])
-        with c9:
-            dormant = st.text_input("휴면 기간",
-                value=existing["dormant_period"] if existing else "",
-                placeholder="예: 2024-01-01~2024-12-31")
-        with c10:
-            ld_val = None
-            if existing and existing.get("leave_date"):
-                try: ld_val = datetime.strptime(str(existing["leave_date"]),"%Y-%m-%d").date()
-                except: pass
-            leave_date = st.date_input("탈퇴일 (입력 시 구분 자동→탈퇴)", value=ld_val)
+    # 행4: 휴면기간 / 탈퇴일
+    c9,c10 = st.columns([1,1])
+    with c9:
+        dormant = st.text_input("휴면 기간",
+            value=existing["dormant_period"] if existing else "",
+            placeholder="예: 2024-01-01~2024-12-31")
+    with c10:
+        ld_val = None
+        if existing and existing.get("leave_date"):
+            try: ld_val = datetime.strptime(str(existing["leave_date"]),"%Y-%m-%d").date()
+            except: pass
+        leave_date = st.date_input("탈퇴일 (입력 시 구분 자동→탈퇴)", value=ld_val)
 
-        # 행5: 입회신청서 / 메모
-        c11,c12 = st.columns([1,2])
-        with c11:
-            app_opts = ["—","Yes","No"]
-            app_idx  = 0
-            if existing:
-                av = existing.get("application","")
-                if av in app_opts: app_idx = app_opts.index(av)
-            application = st.selectbox("입회신청서", app_opts, index=app_idx)
-        with c12:
-            memo = st.text_area("메모",
-                value=existing["memo"] if existing else "",
-                placeholder="특이사항, 역할 등 자유 기재", height=80)
-
+    # 행5: 입회신청서 / 메모
+    c11,c12 = st.columns([1,2])
+    with c11:
+        app_opts = ["—","Yes","No"]
+        app_idx  = 0
         if existing:
-            bs, bc, bd = st.columns([1,1,1])
-            with bs:
-                st.markdown("<div class='save-col'>", unsafe_allow_html=True)
-                submitted = st.form_submit_button("💾 저장", use_container_width=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-            with bc:
-                st.markdown("<div class='cancel-col'>", unsafe_allow_html=True)
-                cancelled = st.form_submit_button("✕ 취소", use_container_width=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-            with bd:
-                st.markdown("<div class='delete-col'>", unsafe_allow_html=True)
-                delete_req = st.form_submit_button("🗑️ 삭제", use_container_width=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-        else:
-            bs, bc = st.columns([1,1])
-            with bs:
-                st.markdown("<div class='save-col'>", unsafe_allow_html=True)
-                submitted = st.form_submit_button("💾 저장", use_container_width=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-            with bc:
-                st.markdown("<div class='cancel-col'>", unsafe_allow_html=True)
-                cancelled = st.form_submit_button("✕ 취소", use_container_width=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-            delete_req = False
+            av = existing.get("application","")
+            if av in app_opts: app_idx = app_opts.index(av)
+        application = st.selectbox("입회신청서", app_opts, index=app_idx)
+    with c12:
+        memo = st.text_area("메모",
+            value=existing["memo"] if existing else "",
+            placeholder="특이사항, 역할 등 자유 기재", height=80)
 
-    if cancelled:
-        st.session_state.open_dialog   = None
-        st.session_state.edit_target   = None
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── 버튼 (st.form 없이 st.button 사용 → CSS 색상 정상 적용) ──
+    if existing:
+        bs, bc, bd = st.columns([1,1,1])
+    else:
+        bs, bc = st.columns([1,1])
+        bd = None
+
+    with bs:
+        st.markdown("<div class='save-col'>", unsafe_allow_html=True)
+        save_clicked = st.button("💾 저장", use_container_width=True, key="form_save")
+        st.markdown("</div>", unsafe_allow_html=True)
+    with bc:
+        st.markdown("<div class='cancel-col'>", unsafe_allow_html=True)
+        cancel_clicked = st.button("✕ 취소", use_container_width=True, key="form_cancel")
+        st.markdown("</div>", unsafe_allow_html=True)
+    delete_clicked = False
+    if bd:
+        with bd:
+            st.markdown("<div class='delete-col'>", unsafe_allow_html=True)
+            delete_clicked = st.button("🗑️ 삭제", use_container_width=True, key="form_delete")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    if cancel_clicked:
+        st.session_state.open_dialog    = None
+        st.session_state.edit_target    = None
         st.session_state.pw_verified_id = None
         st.rerun()
 
-    if delete_req and existing:
-        # 삭제 요청 → 비밀번호 재확인 팝업으로 이동
-        st.session_state.open_dialog   = "pw_delete"
-        st.session_state.edit_target   = {"type":"delete","id":existing["id"],"name":existing["name"]}
+    if delete_clicked and existing:
+        st.session_state.open_dialog    = "pw_delete"
+        st.session_state.edit_target    = {"type":"delete","id":existing["id"],"name":existing["name"]}
         st.session_state.pw_verified_id = None
         st.rerun()
 
-    if submitted:
+    if save_clicked:
         if not name.strip():
             st.error("❗ 성명은 필수입니다.")
         else:
@@ -335,8 +331,8 @@ def dialog_form(existing=None):
                 try: by = int(birth_year.strip())
                 except: pass
 
-            ld_str     = leave_date.strftime("%Y-%m-%d") if leave_date else ""
-            final_cat  = "탈퇴" if ld_str else cat
+            ld_str    = leave_date.strftime("%Y-%m-%d") if leave_date else ""
+            final_cat = "탈퇴" if ld_str else cat
 
             row_data = {
                 "id":             existing["id"] if existing else next_id(df),
@@ -358,8 +354,8 @@ def dialog_form(existing=None):
                 save_row(df, row_data, is_new=(existing is None))
 
             st.success(f"✅ {'수정' if existing else '등록'} 완료! — {final_cat} {name.strip()}")
-            st.session_state.open_dialog   = None
-            st.session_state.edit_target   = None
+            st.session_state.open_dialog    = None
+            st.session_state.edit_target    = None
             st.session_state.pw_verified_id = None
             st.cache_resource.clear()
             st.rerun()
