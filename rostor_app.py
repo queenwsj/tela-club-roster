@@ -10,7 +10,7 @@ import pandas as pd
 from datetime import datetime, date
 
 st.set_page_config(
-    page_title="테라클럽 회원 명부",
+    page_title="테라클럽 회원 명부 v1.00",
     page_icon="🎾",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -74,17 +74,16 @@ html, body, [class*="css"] { font-family:'Noto Sans KR',sans-serif !important; }
     font-weight:700 !important;
     font-size:12px !important;
 }
-/* 수정 버튼 = 노란색 (edit_ key) */
-[data-testid="stButton"]:has(button[data-testid="baseButton-secondary"]) button[key*="edit_"],
-button[data-testid="baseButton-secondary"][title*="수정"] { background:#fbbf24 !important; color:#1a2e4a !important; border:none !important; }
-
-/* 수정 버튼 = 노란색 */
+/* 테이블 수정 버튼 = 노란색 */
 div.edit-col button { background-color:#fbbf24 !important; color:#1a2e4a !important; border:none !important; font-size:12px !important; font-weight:700 !important; }
 div.edit-col button:hover { background-color:#f59e0b !important; }
-/* 삭제 버튼 = 빨간색 */
-div[data-testid="stForm"] button:last-child { background-color:#ef4444 !important; color:#fff !important; border:none !important; }
-div.del-col button  { background-color:#ef4444 !important; color:#ffffff !important; border:none !important; font-size:12px !important; font-weight:700 !important; }
-div.del-col button:hover  { background-color:#dc2626 !important; }
+/* 폼 버튼 3개: 저장=파란색, 취소=회색, 삭제=빨간색 */
+div.save-col button  { background-color:#2563eb !important; color:#fff !important; border:none !important; font-size:12px !important; font-weight:700 !important; }
+div.save-col button:hover  { background-color:#1d4ed8 !important; }
+div.cancel-col button { background-color:#6b7280 !important; color:#fff !important; border:none !important; font-size:12px !important; font-weight:700 !important; }
+div.cancel-col button:hover { background-color:#4b5563 !important; }
+div.delete-col button { background-color:#ef4444 !important; color:#fff !important; border:none !important; font-size:12px !important; font-weight:700 !important; }
+div.delete-col button:hover { background-color:#dc2626 !important; }
 
 /* 다이얼로그 너비 확장 */
 div[data-testid="stDialog"] > div { max-width: 780px !important; width: 90vw !important; }
@@ -290,13 +289,28 @@ def dialog_form(existing=None):
 
         if existing:
             bs, bc, bd = st.columns([1,1,1])
-            submitted = bs.form_submit_button("💾 저장", type="primary", use_container_width=True)
-            cancelled = bc.form_submit_button("✕ 취소", use_container_width=True)
-            delete_req = bd.form_submit_button("🗑️ 삭제", use_container_width=True)
+            with bs:
+                st.markdown("<div class='save-col'>", unsafe_allow_html=True)
+                submitted = st.form_submit_button("💾 저장", use_container_width=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+            with bc:
+                st.markdown("<div class='cancel-col'>", unsafe_allow_html=True)
+                cancelled = st.form_submit_button("✕ 취소", use_container_width=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+            with bd:
+                st.markdown("<div class='delete-col'>", unsafe_allow_html=True)
+                delete_req = st.form_submit_button("🗑️ 삭제", use_container_width=True)
+                st.markdown("</div>", unsafe_allow_html=True)
         else:
             bs, bc = st.columns([1,1])
-            submitted = bs.form_submit_button("💾 저장", type="primary", use_container_width=True)
-            cancelled = bc.form_submit_button("✕ 취소", use_container_width=True)
+            with bs:
+                st.markdown("<div class='save-col'>", unsafe_allow_html=True)
+                submitted = st.form_submit_button("💾 저장", use_container_width=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+            with bc:
+                st.markdown("<div class='cancel-col'>", unsafe_allow_html=True)
+                cancelled = st.form_submit_button("✕ 취소", use_container_width=True)
+                st.markdown("</div>", unsafe_allow_html=True)
             delete_req = False
 
     if cancelled:
