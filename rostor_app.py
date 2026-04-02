@@ -85,20 +85,26 @@ div.cancel-col button:hover { background-color:#4b5563 !important; }
 div.delete-col button { background-color:#ef4444 !important; color:#fff !important; border:none !important; font-size:12px !important; font-weight:700 !important; }
 div.delete-col button:hover { background-color:#dc2626 !important; }
 
-/* 다이얼로그 너비 확장 */
-section[data-testid="stMain"] .stMainBlockContainer {
-    max-width: 1440px !important;
-    width: 1440px !important;
-    padding-left: 2rem !important;
-    padding-right: 2rem !important;
-}
-/* Streamlit 1.30 이하 호환 */
+/* 반응형 — 모바일(아이폰) 최적화 */
+section[data-testid="stMain"] .stMainBlockContainer,
 .block-container {
-    max-width: 1440px !important;
-    padding-left: 2rem !important;
-    padding-right: 2rem !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
 }
-div[data-testid="stDialog"] > div { max-width: 780px !important; width: 90vw !important; }
+@media (max-width: 430px) {
+    .app-header { padding: 14px 16px !important; border-radius: 10px !important; }
+    .app-header h1 { font-size: 15px !important; }
+    .app-header p  { font-size: 10px !important; }
+    .stat-card { padding: 8px 10px !important; min-width: 70px !important; }
+    .stat-num  { font-size: 18px !important; }
+    .stat-label, .stat-sub { font-size: 10px !important; }
+    section[data-testid="stMain"] .stMainBlockContainer,
+    .block-container { padding-left: 0.3rem !important; padding-right: 0.3rem !important; }
+}
+/* 다이얼로그 */
+div[data-testid="stDialog"] > div { max-width: 95vw !important; width: 95vw !important; }
 </style>
 """, unsafe_allow_html=True)
 
