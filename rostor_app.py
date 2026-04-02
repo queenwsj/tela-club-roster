@@ -288,27 +288,54 @@ def dialog_form(existing=None):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── 버튼 (st.form 없이 st.button 사용 → CSS 색상 정상 적용) ──
+    # ── 버튼: inline style injection으로 색상 강제 적용 ──
+    # ── 버튼 색상 (텍스트 기반 CSS + JS 강제 적용) ──
+    st.markdown("""
+    <style>
+    /* 저장=파란색 (primary) */
+    div[data-testid="stDialog"] button[data-testid="stBaseButton-primary"]{
+        background:#2563eb!important;color:#fff!important;border:none!important;
+    }
+    /* 취소=회색, 삭제=빨간색 구분: nth-of-type */
+    div[data-testid="stDialog"] button[data-testid="stBaseButton-secondary"]{
+        background:#6b7280!important;color:#fff!important;border:none!important;
+    }
+    </style>
+    <script>
+    (function applyColors(){
+        const d = window.parent.document;
+        function paint(){
+            d.querySelectorAll('div[data-testid="stDialog"] button[data-testid="stBaseButton-secondary"]')
+            .forEach(b=>{
+                const t = b.innerText.trim();
+                if(t.includes('삭제')){
+                    b.style.setProperty('background','#ef4444','important');
+                    b.style.setProperty('color','#fff','important');
+                    b.style.setProperty('border','none','important');
+                } else {
+                    b.style.setProperty('background','#6b7280','important');
+                    b.style.setProperty('color','#fff','important');
+                    b.style.setProperty('border','none','important');
+                }
+            });
+        }
+        paint();
+        new MutationObserver(paint).observe(d.body,{childList:true,subtree:true});
+    })();
+    </script>
+    """, unsafe_allow_html=True)
+
     if existing:
         bs, bc, bd = st.columns([1,1,1])
     else:
         bs, bc = st.columns([1,1])
         bd = None
 
-    with bs:
-        st.markdown("<div class='save-col'>", unsafe_allow_html=True)
-        save_clicked = st.button("💾 저장", use_container_width=True, key="form_save")
-        st.markdown("</div>", unsafe_allow_html=True)
-    with bc:
-        st.markdown("<div class='cancel-col'>", unsafe_allow_html=True)
-        cancel_clicked = st.button("✕ 취소", use_container_width=True, key="form_cancel")
-        st.markdown("</div>", unsafe_allow_html=True)
+    save_clicked   = bs.button("💾 저장", use_container_width=True, key="form_save",   type="primary")
+    cancel_clicked = bc.button("✕ 취소",  use_container_width=True, key="form_cancel", type="secondary")
     delete_clicked = False
     if bd:
-        with bd:
-            st.markdown("<div class='delete-col'>", unsafe_allow_html=True)
-            delete_clicked = st.button("🗑️ 삭제", use_container_width=True, key="form_delete")
-            st.markdown("</div>", unsafe_allow_html=True)
+        delete_clicked = bd.button("🗑️ 삭제", use_container_width=True, key="form_delete", type="secondary")
 
     if cancel_clicked:
         st.session_state.open_dialog    = None
