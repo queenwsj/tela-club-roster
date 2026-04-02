@@ -305,22 +305,19 @@ def dialog_form(existing=None):
     (function applyColors(){
         const d = window.parent.document;
         function paint(){
-            d.querySelectorAll('div[data-testid="stDialog"] button[data-testid="stBaseButton-secondary"]')
-            .forEach(b=>{
-                const t = b.innerText.trim();
-                if(t.includes('삭제')){
-                    b.style.setProperty('background','#ef4444','important');
-                    b.style.setProperty('color','#fff','important');
-                    b.style.setProperty('border','none','important');
-                } else {
-                    b.style.setProperty('background','#6b7280','important');
-                    b.style.setProperty('color','#fff','important');
-                    b.style.setProperty('border','none','important');
-                }
+            const btns = Array.from(d.querySelectorAll(
+                'div[data-testid="stDialog"] button[data-testid="stBaseButton-secondary"]'));
+            btns.forEach((b, i) => {
+                // 마지막 secondary 버튼 = 삭제 → 빨간색, 나머지 = 회색
+                const isDelete = (i === btns.length - 1) && btns.length > 1;
+                const bg = isDelete ? '#ef4444' : '#6b7280';
+                b.style.setProperty('background', bg, 'important');
+                b.style.setProperty('color', '#fff', 'important');
+                b.style.setProperty('border', 'none', 'important');
             });
         }
         paint();
-        new MutationObserver(paint).observe(d.body,{childList:true,subtree:true});
+        new MutationObserver(paint).observe(d.body, {childList:true, subtree:true});
     })();
     </script>
     """, unsafe_allow_html=True)
