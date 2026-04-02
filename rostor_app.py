@@ -86,6 +86,18 @@ div.delete-col button { background-color:#ef4444 !important; color:#fff !importa
 div.delete-col button:hover { background-color:#dc2626 !important; }
 
 /* 다이얼로그 너비 확장 */
+section[data-testid="stMain"] .stMainBlockContainer {
+    max-width: 1440px !important;
+    width: 1440px !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
+}
+/* Streamlit 1.30 이하 호환 */
+.block-container {
+    max-width: 1440px !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
+}
 div[data-testid="stDialog"] > div { max-width: 780px !important; width: 90vw !important; }
 </style>
 """, unsafe_allow_html=True)
