@@ -24,8 +24,8 @@ SCOPES = [
 ]
 COLUMNS = [
     "id", "category", "name", "cafe_id", "birth_year", "gender",
-    "phone", "join_date", "dormant_period", "leave_date",
-    "email", "application", "region", "memo", "updated_at",
+    "phone", "region", "join_date", "dormant_period", "leave_date",
+    "email", "application", "memo", "updated_at",
 ]
 CATEGORIES   = ["마스터","고문","회장","총무","경기이사","홍보이사","정회원","휴면","탈퇴"]
 CAT_ORDER    = {c: i for i, c in enumerate(CATEGORIES)}
@@ -68,7 +68,23 @@ html, body, [class*="css"] { font-family:'Noto Sans KR',sans-serif !important; }
 .b-regular   { background:#e0f2fe; color:#0369a1; }
 .b-dormant   { background:#fef9c3; color:#854d0e; }
 .b-left      { background:#fee2e2; color:#991b1b; }
-.stButton > button { border-radius:8px !important; font-family:'Noto Sans KR',sans-serif !important; font-weight:600 !important; }
+.stButton > button {
+    border-radius:7px !important;
+    font-family:'Noto Sans KR',sans-serif !important;
+    font-weight:700 !important;
+    font-size:12px !important;
+}
+/* 수정 버튼 = 노란색 (edit_ key) */
+[data-testid="stButton"]:has(button[data-testid="baseButton-secondary"]) button[key*="edit_"],
+button[data-testid="baseButton-secondary"][title*="수정"] { background:#fbbf24 !important; color:#1a2e4a !important; border:none !important; }
+
+/* 수정 버튼 = 노란색 */
+div.edit-col button { background-color:#fbbf24 !important; color:#1a2e4a !important; border:none !important; font-size:12px !important; font-weight:700 !important; }
+div.edit-col button:hover { background-color:#f59e0b !important; }
+/* 삭제 버튼 = 빨간색 */
+div.del-col button  { background-color:#ef4444 !important; color:#ffffff !important; border:none !important; font-size:12px !important; font-weight:700 !important; }
+div.del-col button:hover  { background-color:#dc2626 !important; }
+
 /* 다이얼로그 너비 확장 */
 div[data-testid="stDialog"] > div { max-width: 780px !important; width: 90vw !important; }
 </style>
@@ -383,8 +399,10 @@ for col,(label,cats,cls) in zip(sc[:-1],groups):
     col.markdown(f'<div class="stat-card {cls}"><div class="stat-label">{label}</div>'
                  f'<div class="stat-num">{m+f}</div><div class="stat-sub">남 {m} · 여 {f}</div></div>',
                  unsafe_allow_html=True)
-tm = len(df[df["gender"]=="남"]) if not df.empty else 0
-tf = len(df[df["gender"]=="여"]) if not df.empty else 0
+# 총 회원수 = 탈퇴 제외
+active_df = df[df["category"] != "탈퇴"] if not df.empty else df
+tm = len(active_df[active_df["gender"]=="남"]) if not active_df.empty else 0
+tf = len(active_df[active_df["gender"]=="여"]) if not active_df.empty else 0
 sc[-1].markdown(f'<div class="stat-card total"><div class="stat-label white">총 회원수</div>'
                 f'<div class="stat-num white">{tm+tf}</div><div class="stat-sub white">남 {tm} · 여 {tf}</div></div>',
                 unsafe_allow_html=True)
@@ -462,8 +480,8 @@ st.caption(f"검색 결과 **{len(view_df)}명** / 전체 {len(df)}명")
 # ─────────────────────────────────────────────────────────
 #  회원 목록 테이블
 # ─────────────────────────────────────────────────────────
-CW  = [0.28, 0.65, 0.82, 0.85, 0.46, 0.38, 0.95, 0.72, 0.75, 1.0, 0.72, 0.68, 1.1, 0.7]
-HDR = ["No.","구분","성명","카페ID","생년","성별","연락처","거주지","입회일","휴면기간","탈퇴일","입회신청서","메모","관리"]
+CW  = [0.28, 0.65, 0.82, 0.85, 0.46, 0.38, 0.95, 0.72, 0.75, 1.0, 0.72, 0.68, 1.1, 0.55, 0.55]
+HDR = ["No.","구분","성명","카페ID","생년","성별","연락처","거주지","입회일","휴면기간","탈퇴일","입회신청서","메모","수정","삭제"]
 
 if view_df.empty:
     st.info("🎾 해당 조건의 회원이 없습니다.")
@@ -496,16 +514,21 @@ else:
         rc[11].markdown(f"<div style='padding:5px 0'><span style='{FS};font-weight:700;color:{app_color}'>{app_val}</span></div>", unsafe_allow_html=True)
         rc[12].markdown(f"<div style='padding:7px 0;{FS};color:#4b5563' title='{memo_txt}'>{memo_disp}</div>", unsafe_allow_html=True)
 
-        b1,b2 = rc[13].columns(2)
-        if b1.button("수정", key=f"edit_{row['id']}", use_container_width=True):
-            st.session_state.open_dialog   = "pw_edit"
-            st.session_state.edit_target   = {"type":"edit","id":int(row["id"]),"name":row["name"]}
-            st.session_state.pw_verified_id = None
-            st.rerun()
-        if b2.button("삭제", key=f"del_{row['id']}", use_container_width=True):
-            st.session_state.open_dialog   = "pw_delete"
-            st.session_state.edit_target   = {"type":"delete","id":int(row["id"]),"name":row["name"]}
-            st.session_state.pw_verified_id = None
-            st.rerun()
+        with rc[13]:
+            st.markdown("<div class='edit-col'>", unsafe_allow_html=True)
+            if st.button("✏️ 수정", key=f"edit_{row['id']}", use_container_width=True):
+                st.session_state.open_dialog   = "pw_edit"
+                st.session_state.edit_target   = {"type":"edit","id":int(row["id"]),"name":row["name"]}
+                st.session_state.pw_verified_id = None
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+        with rc[14]:
+            st.markdown("<div class='del-col'>", unsafe_allow_html=True)
+            if st.button("🗑️ 삭제", key=f"del_{row['id']}", use_container_width=True):
+                st.session_state.open_dialog   = "pw_delete"
+                st.session_state.edit_target   = {"type":"delete","id":int(row["id"]),"name":row["name"]}
+                st.session_state.pw_verified_id = None
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("<div style='border-bottom:1px solid #f1f5f9'></div>", unsafe_allow_html=True)
