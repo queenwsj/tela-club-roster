@@ -3,8 +3,11 @@
 실행: streamlit run tela_club_streamlit.py
 """
 
+import re
+import io
 import streamlit as st
 import gspread
+from gspread.utils import rowcol_to_a1
 from google.oauth2.service_account import Credentials
 import pandas as pd
 from datetime import datetime, date
@@ -17,7 +20,10 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────
-ADMIN_PASSWORD = "1223"
+# 비밀번호: 우선 st.secrets에서 읽고, 없으면 기본값(개발용)
+# 운영 시 반드시 .streamlit/secrets.toml 또는 Streamlit Cloud Secrets에 등록:
+#   ADMIN_PASSWORD = "원하는비번"
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "1223")
 SCOPES = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive",
@@ -113,16 +119,15 @@ for k, v in {
     "filter_cat":    "전체",
     "search_q":      "",
     "search_active": "",
-    "open_dialog":   None,   # None | "add" | "edit" | "pw_edit" | "pw_delete" | "confirm_delete"
+    "open_dialog":   None,   # None | "add" | "edit" | "pw_edit" | "pw_delete" | "confirm_delete" | "delete_confirm"
     "edit_target":   None,   # 수정/삭제 대상 {"id":int,"name":str,"type":str}
-    "pw_verified_id": None,  # 비번 인증 완료된 id (deprecated - 호환성 유지)
-    "admin_authed":   False, # 세션 전체 관리자 인증 플래그 (한 번 인증 시 세션 동안 유지)
+    "admin_authed":  False,  # 세션 전체 관리자 인증 플래그
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 # ── Google Sheets ─────────────────────────────────────────
-@st.cache_resource(ttl=0)
+@st.cache_resource
 def get_sheet():
     creds  = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
     client = gspread.authorize(creds)
@@ -142,7 +147,7 @@ def load_df():
 
 def save_row(df, row, is_new):
     sheet = get_sheet()
-    row["updated_at"] = datetime.today().strftime("%Y-%m-%d")
+    row["updated_at"] = datetime.today().strftime("%Y-%m-%d %H:%M")
     values = [str(row.get(c,"") or "") for c in COLUMNS]
     if is_new:
         sheet.append_row(values, value_input_option="USER_ENTERED")
@@ -150,15 +155,25 @@ def save_row(df, row, is_new):
         all_ids = sheet.col_values(1)
         try:
             ri = all_ids.index(str(row["id"])) + 1
-            sheet.update(f"A{ri}:{chr(64+len(COLUMNS))}{ri}", [values], value_input_option="USER_ENTERED")
+            # gspread.utils.rowcol_to_a1로 안전하게 A1 변환 (컬럼 27개 넘어도 OK)
+            start_cell = rowcol_to_a1(ri, 1)
+            end_cell   = rowcol_to_a1(ri, len(COLUMNS))
+            sheet.update(f"{start_cell}:{end_cell}", [values], value_input_option="USER_ENTERED")
         except ValueError:
             sheet.append_row(values, value_input_option="USER_ENTERED")
 
 def delete_row(mid):
     sheet   = get_sheet()
     all_ids = sheet.col_values(1)
+    # 헤더 행 안전성 검증: 첫 행이 "id"인지 확인 (헤더가 사라졌으면 위험)
+    if not all_ids or all_ids[0] != "id":
+        raise RuntimeError("시트 헤더가 손상되었습니다. 관리자에게 문의하세요.")
     try:
-        sheet.delete_rows(all_ids.index(str(mid)) + 1)
+        idx = all_ids.index(str(mid))
+        # ID가 헤더 위치(0)에 있으면 절대 삭제하지 않음
+        if idx == 0:
+            raise RuntimeError("헤더 행은 삭제할 수 없습니다.")
+        sheet.delete_rows(idx + 1)
     except ValueError:
         pass
 
@@ -181,6 +196,105 @@ def cell(txt, color="#374151", extra=""):
     return f"<div style='padding:7px 0;{FS};color:{color};{extra}'>{txt}</div>"
 
 # ─────────────────────────────────────────────────────────
+# 검증 함수
+# ─────────────────────────────────────────────────────────
+PHONE_RE = re.compile(r"^\d{2,4}-?\d{3,4}-?\d{4}$")
+EMAIL_RE = re.compile(r"^[\w\.\-+]+@[\w\.\-]+\.\w{2,}$")
+DATE_RE  = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+DORMANT_RANGE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}~(\d{4}-\d{2}-\d{2})?$")  # YYYY-MM-DD~ 또는 YYYY-MM-DD~YYYY-MM-DD
+
+def validate_phone(s):
+    if not s: return True
+    return bool(PHONE_RE.match(s.strip()))
+
+def validate_email(s):
+    if not s: return True
+    return bool(EMAIL_RE.match(s.strip()))
+
+def validate_date(s):
+    if not s: return True
+    if not DATE_RE.match(s.strip()): return False
+    try:
+        datetime.strptime(s.strip(), "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+def validate_birth_year(y):
+    if y is None or y == "": return True
+    try:
+        y = int(y)
+        return 1900 <= y <= date.today().year
+    except (ValueError, TypeError):
+        return False
+
+# ─────────────────────────────────────────────────────────
+# 휴면 기간 관리 (누적)
+# 형식: "YYYY-MM-DD~YYYY-MM-DD; YYYY-MM-DD~"  (세미콜론으로 구분, 끝 날짜 비우면 진행중)
+# ─────────────────────────────────────────────────────────
+def parse_dormant_periods(s):
+    """누적된 휴면 기간 문자열을 리스트로 변환"""
+    if not s or not str(s).strip(): return []
+    periods = []
+    for chunk in str(s).split(";"):
+        chunk = chunk.strip()
+        if not chunk: continue
+        if "~" in chunk:
+            start, _, end = chunk.partition("~")
+            periods.append({"start": start.strip(), "end": end.strip()})
+        else:
+            periods.append({"start": chunk, "end": ""})
+    return periods
+
+def format_dormant_periods(periods):
+    """리스트 → 저장용 문자열"""
+    parts = []
+    for p in periods:
+        start = (p.get("start") or "").strip()
+        end   = (p.get("end") or "").strip()
+        if not start: continue
+        parts.append(f"{start}~{end}")
+    return "; ".join(parts)
+
+def validate_dormant_period_str(s):
+    """휴면기간 문자열 형식 검증 - 'YYYY-MM-DD~' 또는 'YYYY-MM-DD~YYYY-MM-DD' 형식만 허용"""
+    if not s: return True
+    for chunk in str(s).split(";"):
+        chunk = chunk.strip()
+        if not chunk: continue
+        if not DORMANT_RANGE_RE.match(chunk): return False
+        start, _, end = chunk.partition("~")
+        if not validate_date(start): return False
+        if end and not validate_date(end): return False
+    return True
+
+def has_ongoing_dormant(s):
+    """진행중인(end가 없는) 휴면 기간이 있는지"""
+    for p in parse_dormant_periods(s):
+        if not p["end"]: return True
+    return False
+
+def check_duplicate(df, name, phone, cafe_id, exclude_id=None):
+    """중복 검사: 이름+연락처 또는 카페ID. 중복되면 사유 문자열 반환, 없으면 None"""
+    if df.empty: return None
+    target = df[df["id"] != exclude_id] if exclude_id is not None else df
+
+    name_n = (name or "").strip()
+    phone_n = (phone or "").strip()
+    cafe_n = (cafe_id or "").strip()
+
+    if name_n and phone_n:
+        dup = target[(target["name"].astype(str).str.strip() == name_n) &
+                     (target["phone"].astype(str).str.strip() == phone_n)]
+        if not dup.empty:
+            return f"이름+연락처가 동일한 회원이 이미 있습니다 (No.{int(dup.iloc[0]['id'])} {dup.iloc[0]['name']})"
+    if cafe_n:
+        dup = target[target["cafe_id"].astype(str).str.strip() == cafe_n]
+        if not dup.empty:
+            return f"카페ID가 동일한 회원이 이미 있습니다 (No.{int(dup.iloc[0]['id'])} {dup.iloc[0]['name']})"
+    return None
+
+# ─────────────────────────────────────────────────────────
 #  팝업 다이얼로그: 관리자 비밀번호
 # ─────────────────────────────────────────────────────────
 @st.dialog("🔐 관리자 인증")
@@ -194,7 +308,6 @@ def dialog_pw(target):
         if pw == ADMIN_PASSWORD:
             # 인증 성공 → 세션 전체 인증 플래그 설정
             st.session_state.admin_authed = True
-            st.session_state.pw_verified_id = target["id"]  # 호환성 유지
             if target["type"] == "edit":
                 st.session_state.open_dialog = "edit"
             else:
@@ -220,13 +333,11 @@ def dialog_delete(target):
             delete_row(target["id"])
         st.session_state.open_dialog   = None
         st.session_state.edit_target   = None
-        st.session_state.pw_verified_id = None
         st.cache_resource.clear()
         st.rerun()
     if cn.button("취소", use_container_width=True):
         st.session_state.open_dialog   = None
         st.session_state.edit_target   = None
-        st.session_state.pw_verified_id = None
         st.rerun()
 
 # ─────────────────────────────────────────────────────────
@@ -280,7 +391,6 @@ def dialog_confirm_delete(target):
         if st.button("✕ 취소", use_container_width=True, key="confirm_del_no"):
             st.session_state.open_dialog   = None
             st.session_state.edit_target   = None
-            st.session_state.pw_verified_id = None
             st.rerun()
 
 
@@ -332,12 +442,16 @@ def dialog_form(existing=None):
         email = st.text_input("이메일",
             value=existing["email"] if existing else "", placeholder="example@email.com")
 
-    # 행4: 휴면기간 / 탈퇴일
+    # 행4: 휴면기간 (누적 관리) / 탈퇴일
     c9,c10 = st.columns([1,1])
     with c9:
-        dormant = st.text_input("휴면 기간",
-            value=existing["dormant_period"] if existing else "",
-            placeholder="예: 2024-01-01~2024-12-31")
+        dormant_existing = existing["dormant_period"] if existing else ""
+        dormant_str = st.text_input(
+            "휴면 기간 (입력 시 구분 자동→휴면)",
+            value=dormant_existing,
+            placeholder="YYYY-MM-DD~YYYY-MM-DD (끝 비우면 진행중)",
+            help="여러 기간은 세미콜론(;)으로 구분.  예: 2024-01-01~2024-12-31; 2025-06-01~"
+        )
     with c10:
         ld_str_existing = ""
         if existing and existing.get("leave_date"):
@@ -347,6 +461,21 @@ def dialog_form(existing=None):
             value=ld_str_existing,
             placeholder="YYYY-MM-DD (비우면 탈퇴 해제)"
         )
+
+    # 휴면 기간 누적 목록 표시 (수정 시에만)
+    if existing and dormant_existing:
+        periods = parse_dormant_periods(dormant_existing)
+        if periods:
+            with st.expander(f"📋 휴면 기간 이력 ({len(periods)}건)", expanded=False):
+                for i, p in enumerate(periods, 1):
+                    status = "🟡 진행중" if not p["end"] else "✅ 종료"
+                    end_disp = p["end"] if p["end"] else "(진행중)"
+                    st.markdown(
+                        f"<div style='padding:6px 10px;background:#fef9c3;border-radius:6px;"
+                        f"margin-bottom:4px;{FS}'>"
+                        f"<b>#{i}</b> &nbsp; {p['start']} ~ {end_disp} &nbsp; {status}"
+                        f"</div>", unsafe_allow_html=True)
+
 
     # 행5: 입회신청서 / 메모
     c11,c12 = st.columns([1,2])
@@ -410,32 +539,68 @@ def dialog_form(existing=None):
     if cancel_clicked:
         st.session_state.open_dialog    = None
         st.session_state.edit_target    = None
-        st.session_state.pw_verified_id = None
         st.rerun()
 
     if delete_clicked and existing:
         st.session_state.open_dialog    = "confirm_delete"
         st.session_state.edit_target    = {"type":"delete","id":existing["id"],"name":existing["name"]}
-        st.session_state.pw_verified_id = None
         st.rerun()
 
     if save_clicked:
-        if not name.strip():
-            st.error("❗ 성명은 필수입니다.")
-        else:
-            by = None
-            if birth_year.strip():
-                try: by = int(birth_year.strip())
-                except: pass
+        # ── 검증 단계 (순차적으로 모든 에러를 수집) ──
+        errors = []
 
-            ld_str = leave_date_str.strip()
+        # 1. 필수 필드
+        if not name.strip():
+            errors.append("성명은 필수입니다.")
+
+        # 2. 생년 범위
+        by = None
+        if birth_year.strip():
+            try:
+                by = int(birth_year.strip())
+                if not (1900 <= by <= date.today().year):
+                    errors.append(f"생년은 1900~{date.today().year} 사이여야 합니다.")
+            except ValueError:
+                errors.append("생년은 4자리 숫자여야 합니다.")
+
+        # 3. 연락처 형식
+        if phone.strip() and not validate_phone(phone.strip()):
+            errors.append("연락처 형식이 올바르지 않습니다. (예: 010-1234-5678)")
+
+        # 4. 이메일 형식
+        if email.strip() and not validate_email(email.strip()):
+            errors.append("이메일 형식이 올바르지 않습니다.")
+
+        # 5. 탈퇴일 형식
+        ld_str = leave_date_str.strip()
+        if ld_str and not validate_date(ld_str):
+            errors.append("탈퇴일 형식이 올바르지 않습니다. (YYYY-MM-DD)")
+
+        # 6. 휴면 기간 형식
+        dorm_str = dormant_str.strip()
+        if dorm_str and not validate_dormant_period_str(dorm_str):
+            errors.append("휴면 기간 형식이 올바르지 않습니다. (예: 2024-01-01~2024-12-31)")
+
+        # 7. 중복 검사 (신규 + 수정 모두)
+        if not errors:
+            exclude_id = existing["id"] if existing else None
+            dup_msg = check_duplicate(df, name, phone, cafe_id, exclude_id=exclude_id)
+            if dup_msg:
+                errors.append(f"⚠️ {dup_msg}")
+
+        if errors:
+            for e in errors:
+                st.error(f"❗ {e}")
+        else:
+            # ── 카테고리 자동 결정 (우선순위: 탈퇴 > 휴면 > 사용자 선택) ──
             if ld_str:
-                try:
-                    datetime.strptime(ld_str, "%Y-%m-%d")
-                except ValueError:
-                    st.error("❗ 탈퇴일 형식이 올바르지 않습니다. (예: 2026-01-01)")
-                    st.stop()
-            final_cat = "탈퇴" if ld_str else cat
+                final_cat = "탈퇴"
+            elif dorm_str and has_ongoing_dormant(dorm_str):
+                # 진행중인 휴면이 있으면 자동 "휴면"
+                final_cat = "휴면"
+            else:
+                final_cat = cat
 
             row_data = {
                 "id":             existing["id"] if existing else next_id(df),
@@ -446,7 +611,7 @@ def dialog_form(existing=None):
                 "gender":         gender,
                 "phone":          phone.strip(),
                 "join_date":      join_date.strftime("%Y-%m-%d") if join_date else "",
-                "dormant_period": dormant.strip(),
+                "dormant_period": dorm_str,
                 "leave_date":     ld_str,
                 "email":          email.strip(),
                 "application":    "" if application=="—" else application,
@@ -459,7 +624,6 @@ def dialog_form(existing=None):
             st.success(f"✅ {'수정' if existing else '등록'} 완료! — {final_cat} {name.strip()}")
             st.session_state.open_dialog    = None
             st.session_state.edit_target    = None
-            st.session_state.pw_verified_id = None
             st.cache_resource.clear()
             st.rerun()
 
@@ -469,7 +633,7 @@ def dialog_form(existing=None):
 st.markdown("""
 <div class="app-header">
   <span style="font-size:36px">🎾</span>
-  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.01)</span></h1>
+  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.02)</span></h1>
   <p>TELA CLUB Member Roster · Google Sheets 연동</p></div>
 </div>""", unsafe_allow_html=True)
 
@@ -485,7 +649,6 @@ if st.session_state.admin_authed:
     with auth_col2:
         if st.button("🔒 로그아웃", use_container_width=True, key="admin_logout"):
             st.session_state.admin_authed = False
-            st.session_state.pw_verified_id = None
             st.rerun()
 
 
@@ -564,7 +727,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ─────────────────────────────────────────────────────────
 #  툴바
 # ─────────────────────────────────────────────────────────
-c_s, c_sb, c_add = st.columns([4, 0.8, 1.2])
+c_s, c_sb, c_dl, c_add = st.columns([4, 0.8, 1.0, 1.2])
 with c_s:
     search_q = st.text_input("검색", value=st.session_state.search_q,
         placeholder="이름 / 카페ID / 연락처 입력 후 검색 버튼 클릭",
@@ -574,11 +737,22 @@ with c_sb:
     if st.button("🔍 검색", use_container_width=True):
         st.session_state.search_active = search_q.strip()
         st.rerun()
+with c_dl:
+    # CSV 백업 다운로드 (BOM 추가로 엑셀 한글 깨짐 방지)
+    csv_data = df.to_csv(index=False).encode("utf-8-sig") if not df.empty else "".encode("utf-8-sig")
+    today_str = date.today().strftime("%Y%m%d")
+    st.download_button(
+        "📥 백업",
+        data=csv_data,
+        file_name=f"tela_club_backup_{today_str}.csv",
+        mime="text/csv",
+        use_container_width=True,
+        help="현재 명부 전체를 CSV로 다운로드 (엑셀 호환)"
+    )
 with c_add:
     if st.button("＋ 회원 등록", type="primary", use_container_width=True):
         st.session_state.open_dialog  = "add"
         st.session_state.edit_target  = None
-        st.session_state.pw_verified_id = None
         st.rerun()
 
 if not search_q.strip():
@@ -663,7 +837,21 @@ else:
         rc[6].markdown(cell(row.get('phone','') or '—'), unsafe_allow_html=True)
         rc[7].markdown(cell(row.get('region','') or '—',"#374151"), unsafe_allow_html=True)
         rc[8].markdown(cell(row.get('join_date','') or '—',"#6b7280"), unsafe_allow_html=True)
-        rc[9].markdown(cell(row.get('dormant_period','') or '—',"#ca8a04"), unsafe_allow_html=True)
+        # 휴면 기간 요약 표시: 건수 + 진행중 여부
+        dorm_raw = str(row.get('dormant_period','') or '').strip()
+        if dorm_raw:
+            dorm_list = parse_dormant_periods(dorm_raw)
+            dorm_cnt  = len(dorm_list)
+            dorm_ongoing = any(not p["end"] for p in dorm_list)
+            if dorm_cnt == 1 and not dorm_ongoing:
+                dorm_disp = dorm_list[0]['start'] + "~" + dorm_list[0]['end']
+            elif dorm_ongoing:
+                dorm_disp = f"{dorm_cnt}건 🟡진행중"
+            else:
+                dorm_disp = f"{dorm_cnt}건 종료"
+        else:
+            dorm_disp = "—"
+        rc[9].markdown(f"<div style='padding:7px 0;{FS};color:#ca8a04' title='{dorm_raw}'>{dorm_disp}</div>", unsafe_allow_html=True)
         rc[10].markdown(cell(row.get('leave_date','') or '—',"#dc2626"), unsafe_allow_html=True)
         rc[11].markdown(f"<div style='padding:5px 0'><span style='{FS};font-weight:700;color:{app_color}'>{app_val}</span></div>", unsafe_allow_html=True)
         rc[12].markdown(f"<div style='padding:7px 0;{FS};color:#4b5563' title='{memo_txt}'>{memo_disp}</div>", unsafe_allow_html=True)
