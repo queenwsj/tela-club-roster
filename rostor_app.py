@@ -443,15 +443,20 @@ def dialog_form(existing=None):
             value=existing["email"] if existing else "", placeholder="example@email.com")
 
     # 행4: 휴면기간 (누적 관리) / 탈퇴일
-    c9,c10 = st.columns([1,1])
-    with c9:
-        dormant_existing = existing["dormant_period"] if existing else ""
-        dormant_str = st.text_input(
-            "휴면 기간 (입력 시 구분 자동→휴면)",
-            value=dormant_existing,
-            placeholder="YYYY-MM-DD~YYYY-MM-DD (끝 비우면 진행중)",
-            help="여러 기간은 세미콜론(;)으로 구분.  예: 2024-01-01~2024-12-31; 2025-06-01~"
-        )
+    # ─────────────────────────────────────────────────────────
+    # 휴면 기간 세션 초기화: 이 다이얼로그가 처음 열릴 때만 기존 값 로드
+    # (다른 위젯 조작으로 인한 rerun에서는 기존 편집 상태 유지)
+    target_id = existing["id"] if existing else "new"
+    dorm_session_key = f"dormant_edit_list_{target_id}"
+    if dorm_session_key not in st.session_state:
+        if existing and existing.get("dormant_period"):
+            st.session_state[dorm_session_key] = parse_dormant_periods(existing["dormant_period"])
+        else:
+            st.session_state[dorm_session_key] = []
+
+    c9_label, c10 = st.columns([1,1])
+    with c9_label:
+        st.markdown("**휴면 기간** <span style='font-size:11px;color:#6b7280;'>(진행중이면 자동→휴면, 모두 종료 시 자동→정회원)</span>", unsafe_allow_html=True)
     with c10:
         ld_str_existing = ""
         if existing and existing.get("leave_date"):
@@ -462,20 +467,63 @@ def dialog_form(existing=None):
             placeholder="YYYY-MM-DD (비우면 탈퇴 해제)"
         )
 
-    # 휴면 기간 누적 목록 표시 (수정 시에만)
-    if existing and dormant_existing:
-        periods = parse_dormant_periods(dormant_existing)
-        if periods:
-            with st.expander(f"📋 휴면 기간 이력 ({len(periods)}건)", expanded=False):
-                for i, p in enumerate(periods, 1):
-                    status = "🟡 진행중" if not p["end"] else "✅ 종료"
-                    end_disp = p["end"] if p["end"] else "(진행중)"
-                    st.markdown(
-                        f"<div style='padding:6px 10px;background:#fef9c3;border-radius:6px;"
-                        f"margin-bottom:4px;{FS}'>"
-                        f"<b>#{i}</b> &nbsp; {p['start']} ~ {end_disp} &nbsp; {status}"
-                        f"</div>", unsafe_allow_html=True)
+    # ─── 휴면 기간 입력 행들 (누적 관리) ───
+    dorm_list = st.session_state[dorm_session_key]
 
+    # 휴면 기간 행 스타일
+    st.markdown("""
+    <style>
+    div.dormant-row-wrap {
+        background:#fef9c3; border-radius:8px; padding:8px 12px;
+        margin-bottom:6px; border-left:3px solid #ca8a04;
+    }
+    .st-key-add_dormant_btn button {
+        background:#fef3c7 !important; color:#854d0e !important;
+        border:1px dashed #ca8a04 !important; font-weight:700 !important;
+    }
+    .st-key-add_dormant_btn button:hover { background:#fde68a !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    if not dorm_list:
+        st.caption("📭 등록된 휴면 기간이 없습니다. 아래 '+ 기간 추가' 버튼으로 추가하세요.")
+    else:
+        for i, p in enumerate(dorm_list):
+            st.markdown('<div class="dormant-row-wrap">', unsafe_allow_html=True)
+            rc_lbl, rc_start, rc_end, rc_status, rc_del = st.columns([0.5, 1.5, 1.5, 1, 0.6])
+            with rc_lbl:
+                st.markdown(f"<div style='padding-top:8px;font-weight:700;color:#854d0e;{FS}'>#{i+1}</div>", unsafe_allow_html=True)
+            with rc_start:
+                new_start = st.text_input(
+                    "시작일", value=p["start"],
+                    key=f"dorm_start_{target_id}_{i}",
+                    placeholder="YYYY-MM-DD", label_visibility="collapsed"
+                )
+                dorm_list[i]["start"] = new_start.strip()
+            with rc_end:
+                new_end = st.text_input(
+                    "종료일", value=p["end"],
+                    key=f"dorm_end_{target_id}_{i}",
+                    placeholder="YYYY-MM-DD (비우면 진행중)", label_visibility="collapsed"
+                )
+                dorm_list[i]["end"] = new_end.strip()
+            with rc_status:
+                is_ongoing = not dorm_list[i]["end"]
+                status_html = ("<span style='color:#ca8a04;font-weight:700;'>🟡 진행중</span>"
+                               if is_ongoing else
+                               "<span style='color:#16a34a;font-weight:700;'>✅ 종료</span>")
+                st.markdown(f"<div style='padding-top:8px;{FS}'>{status_html}</div>", unsafe_allow_html=True)
+            with rc_del:
+                if st.button("🗑️", key=f"dorm_del_{target_id}_{i}",
+                             use_container_width=True, help="이 기간 삭제"):
+                    st.session_state[dorm_session_key].pop(i)
+                    st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    # + 기간 추가 버튼
+    if st.button("➕ 휴면 기간 추가", use_container_width=True, key="add_dormant_btn"):
+        st.session_state[dorm_session_key].append({"start": "", "end": ""})
+        st.rerun()
 
     # 행5: 입회신청서 / 메모
     c11,c12 = st.columns([1,2])
@@ -537,11 +585,17 @@ def dialog_form(existing=None):
             delete_clicked = st.button("🗑️ 삭제", use_container_width=True, key="form_delete")
 
     if cancel_clicked:
+        # 휴면 편집 세션 정리
+        if dorm_session_key in st.session_state:
+            del st.session_state[dorm_session_key]
         st.session_state.open_dialog    = None
         st.session_state.edit_target    = None
         st.rerun()
 
     if delete_clicked and existing:
+        # 휴면 편집 세션 정리
+        if dorm_session_key in st.session_state:
+            del st.session_state[dorm_session_key]
         st.session_state.open_dialog    = "confirm_delete"
         st.session_state.edit_target    = {"type":"delete","id":existing["id"],"name":existing["name"]}
         st.rerun()
@@ -577,10 +631,28 @@ def dialog_form(existing=None):
         if ld_str and not validate_date(ld_str):
             errors.append("탈퇴일 형식이 올바르지 않습니다. (YYYY-MM-DD)")
 
-        # 6. 휴면 기간 형식
-        dorm_str = dormant_str.strip()
-        if dorm_str and not validate_dormant_period_str(dorm_str):
-            errors.append("휴면 기간 형식이 올바르지 않습니다. (예: 2024-01-01~2024-12-31)")
+        # 6. 휴면 기간 검증 (세션 리스트 → 문자열 조립)
+        # 빈 행은 제거하고, 시작일이 있는 것만 보존
+        clean_dorm_list = []
+        for i, p in enumerate(dorm_list):
+            s = (p.get("start") or "").strip()
+            e = (p.get("end") or "").strip()
+            if not s and not e:
+                continue  # 완전 빈 행은 무시
+            if not s:
+                errors.append(f"휴면 기간 #{i+1}: 시작일이 비어있습니다.")
+                continue
+            if not validate_date(s):
+                errors.append(f"휴면 기간 #{i+1}: 시작일 형식이 올바르지 않습니다. (YYYY-MM-DD)")
+                continue
+            if e and not validate_date(e):
+                errors.append(f"휴면 기간 #{i+1}: 종료일 형식이 올바르지 않습니다. (YYYY-MM-DD)")
+                continue
+            if e and s > e:
+                errors.append(f"휴면 기간 #{i+1}: 종료일이 시작일보다 빠를 수 없습니다.")
+                continue
+            clean_dorm_list.append({"start": s, "end": e})
+        dorm_str = format_dormant_periods(clean_dorm_list)
 
         # 7. 중복 검사 (신규 + 수정 모두)
         if not errors:
@@ -593,12 +665,18 @@ def dialog_form(existing=None):
             for e in errors:
                 st.error(f"❗ {e}")
         else:
-            # ── 카테고리 자동 결정 (우선순위: 탈퇴 > 휴면 > 사용자 선택) ──
+            # ── 카테고리 자동 결정 (우선순위: 탈퇴 > 진행중휴면 > 휴면종료시 정회원복귀 > 사용자선택) ──
+            had_dormant = bool(dorm_str)  # 휴면 기간 데이터가 있는지
+            has_ongoing = had_dormant and any(not p["end"] for p in clean_dorm_list)
+
             if ld_str:
                 final_cat = "탈퇴"
-            elif dorm_str and has_ongoing_dormant(dorm_str):
-                # 진행중인 휴면이 있으면 자동 "휴면"
+            elif has_ongoing:
+                # 진행중 휴면 → 자동 휴면
                 final_cat = "휴면"
+            elif had_dormant and cat == "휴면":
+                # 휴면 기간이 모두 종료되었고 현재 카테고리가 "휴면"이면 → 자동으로 정회원 복귀
+                final_cat = "정회원"
             else:
                 final_cat = cat
 
@@ -622,6 +700,9 @@ def dialog_form(existing=None):
                 save_row(df, row_data, is_new=(existing is None))
 
             st.success(f"✅ {'수정' if existing else '등록'} 완료! — {final_cat} {name.strip()}")
+            # 휴면 편집 세션 정리
+            if dorm_session_key in st.session_state:
+                del st.session_state[dorm_session_key]
             st.session_state.open_dialog    = None
             st.session_state.edit_target    = None
             st.cache_resource.clear()
@@ -633,7 +714,7 @@ def dialog_form(existing=None):
 st.markdown("""
 <div class="app-header">
   <span style="font-size:36px">🎾</span>
-  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.02)</span></h1>
+  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.03)</span></h1>
   <p>TELA CLUB Member Roster · Google Sheets 연동</p></div>
 </div>""", unsafe_allow_html=True)
 
@@ -837,18 +918,26 @@ else:
         rc[6].markdown(cell(row.get('phone','') or '—'), unsafe_allow_html=True)
         rc[7].markdown(cell(row.get('region','') or '—',"#374151"), unsafe_allow_html=True)
         rc[8].markdown(cell(row.get('join_date','') or '—',"#6b7280"), unsafe_allow_html=True)
-        # 휴면 기간 요약 표시: 건수 + 진행중 여부
+        # 휴면 기간 요약 표시
+        # - 1건 종료: 시작~끝 그대로
+        # - 진행중: 최신 진행중 기간의 시작일 표시 (사용자 요청)
+        # - 여러 건 모두 종료: N건 종료
         dorm_raw = str(row.get('dormant_period','') or '').strip()
         if dorm_raw:
-            dorm_list = parse_dormant_periods(dorm_raw)
-            dorm_cnt  = len(dorm_list)
-            dorm_ongoing = any(not p["end"] for p in dorm_list)
-            if dorm_cnt == 1 and not dorm_ongoing:
-                dorm_disp = dorm_list[0]['start'] + "~" + dorm_list[0]['end']
-            elif dorm_ongoing:
-                dorm_disp = f"{dorm_cnt}건 🟡진행중"
+            dorm_list_disp = parse_dormant_periods(dorm_raw)
+            dorm_cnt  = len(dorm_list_disp)
+            ongoing_periods = [p for p in dorm_list_disp if not p["end"]]
+            if ongoing_periods:
+                # 진행중인 기간이 있으면 그 시작일 표시 (최신 = 마지막)
+                latest_ongoing = ongoing_periods[-1]
+                dorm_disp = f"{latest_ongoing['start']}~"
+            elif dorm_cnt == 1:
+                # 단일 종료된 기간
+                dorm_disp = f"{dorm_list_disp[0]['start']}~{dorm_list_disp[0]['end']}"
             else:
-                dorm_disp = f"{dorm_cnt}건 종료"
+                # 여러 건 모두 종료
+                last = dorm_list_disp[-1]
+                dorm_disp = f"{last['start']}~{last['end']} 외 {dorm_cnt-1}건"
         else:
             dorm_disp = "—"
         rc[9].markdown(f"<div style='padding:7px 0;{FS};color:#ca8a04' title='{dorm_raw}'>{dorm_disp}</div>", unsafe_allow_html=True)
