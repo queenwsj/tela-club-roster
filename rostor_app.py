@@ -245,25 +245,40 @@ def dialog_confirm_delete(target):
     </div>
     """, unsafe_allow_html=True)
     st.divider()
-    cy, cn = st.columns(2)
+
+    # 버튼 스타일 정의 (div 래퍼 기반)
+    st.markdown("""
+    <style>
+    div.btn-confirm-del button {
+        background: #ef4444 !important; color: #fff !important; border: none !important;
+        font-weight: 700 !important; height: 42px !important;
+    }
+    div.btn-confirm-del button:hover { background: #dc2626 !important; color: #fff !important; }
+    div.btn-confirm-cancel button {
+        background: #6b7280 !important; color: #fff !important; border: none !important;
+        font-weight: 700 !important; height: 42px !important;
+    }
+    div.btn-confirm-cancel button:hover { background: #4b5563 !important; color: #fff !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    cy, cn = st.columns([1, 1], gap="small")
     with cy:
-        st.markdown("""
-        <style>
-        button[aria-label="confirm_del_yes"] {
-            background: #ef4444 !important; color: #fff !important; border: none !important;
-        }
-        button[aria-label="confirm_del_yes"]:hover { background: #dc2626 !important; }
-        </style>""", unsafe_allow_html=True)
+        st.markdown('<div class="btn-confirm-del">', unsafe_allow_html=True)
         if st.button("🗑️ 삭제 진행", use_container_width=True, key="confirm_del_yes"):
             st.session_state.open_dialog = "pw_delete"
             st.session_state.edit_target = target
             st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
     with cn:
+        st.markdown('<div class="btn-confirm-cancel">', unsafe_allow_html=True)
         if st.button("✕ 취소", use_container_width=True, key="confirm_del_no"):
             st.session_state.open_dialog   = None
             st.session_state.edit_target   = None
             st.session_state.pw_verified_id = None
             st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 @st.dialog("회원 정보", width="large")
@@ -345,35 +360,27 @@ def dialog_form(existing=None):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── 버튼 색상: key 속성 기반 CSS (가장 확실) ──
-    # Streamlit은 button에 aria-label=key 를 설정함
+    # ── 버튼 색상: div 래퍼 클래스 기반 (확실하게 적용됨) ──
     st.markdown("""
     <style>
-    /* ── 저장 버튼 (파랑) ── */
-    div[data-testid="stDialog"] button[kind="primary"],
-    div[data-testid="stDialog"] button[data-testid="stBaseButton-primary"] {
-        background: #2563eb !important;
-        color: #fff !important;
-        border: none !important;
+    /* 저장 (파랑) */
+    div.btn-save button {
+        background: #2563eb !important; color: #fff !important; border: none !important;
+        font-weight: 700 !important;
     }
-    div[data-testid="stDialog"] button[kind="primary"]:hover,
-    div[data-testid="stDialog"] button[data-testid="stBaseButton-primary"]:hover {
-        background: #1d4ed8 !important;
+    div.btn-save button:hover { background: #1d4ed8 !important; color: #fff !important; }
+    /* 취소 (회색) */
+    div.btn-cancel button {
+        background: #6b7280 !important; color: #fff !important; border: none !important;
+        font-weight: 700 !important;
     }
-    /* ── 취소 버튼 (회색) ── */
-    button[aria-label="form_cancel"] {
-        background: #6b7280 !important;
-        color: #fff !important;
-        border: none !important;
+    div.btn-cancel button:hover { background: #4b5563 !important; color: #fff !important; }
+    /* 삭제 (빨강) */
+    div.btn-delete button {
+        background: #ef4444 !important; color: #fff !important; border: none !important;
+        font-weight: 700 !important;
     }
-    button[aria-label="form_cancel"]:hover { background: #4b5563 !important; }
-    /* ── 삭제 버튼 (빨강) ── */
-    button[aria-label="form_delete"] {
-        background: #ef4444 !important;
-        color: #fff !important;
-        border: none !important;
-    }
-    button[aria-label="form_delete"]:hover { background: #dc2626 !important; }
+    div.btn-delete button:hover { background: #dc2626 !important; color: #fff !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -383,11 +390,20 @@ def dialog_form(existing=None):
         bs, bc = st.columns([1,1])
         bd = None
 
-    save_clicked   = bs.button("💾 저장", use_container_width=True, key="form_save",   type="primary")
-    cancel_clicked = bc.button("✕ 취소",  use_container_width=True, key="form_cancel", type="secondary")
+    with bs:
+        st.markdown('<div class="btn-save">', unsafe_allow_html=True)
+        save_clicked = st.button("💾 저장", use_container_width=True, key="form_save")
+        st.markdown('</div>', unsafe_allow_html=True)
+    with bc:
+        st.markdown('<div class="btn-cancel">', unsafe_allow_html=True)
+        cancel_clicked = st.button("✕ 취소", use_container_width=True, key="form_cancel")
+        st.markdown('</div>', unsafe_allow_html=True)
     delete_clicked = False
     if bd:
-        delete_clicked = bd.button("🗑️ 삭제", use_container_width=True, key="form_delete", type="secondary")
+        with bd:
+            st.markdown('<div class="btn-delete">', unsafe_allow_html=True)
+            delete_clicked = st.button("🗑️ 삭제", use_container_width=True, key="form_delete")
+            st.markdown('</div>', unsafe_allow_html=True)
 
     if cancel_clicked:
         st.session_state.open_dialog    = None
