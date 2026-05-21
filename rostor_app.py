@@ -501,9 +501,15 @@ with st.spinner("📡 구글 시트에서 데이터 불러오는 중…"):
 
 # ─────────────────────────────────────────────────────────
 #  다이얼로그 라우터 — 렌더링 최상단에서 처리
+#  ⚠️ 중요: 다이얼로그를 띄운 직후 open_dialog 상태를 비워서
+#         다음 rerun(다른 위젯 조작 등)에서 다이얼로그가 재팝업되지 않도록 함
 # ─────────────────────────────────────────────────────────
 od = st.session_state.open_dialog
 et = st.session_state.edit_target
+
+# 다이얼로그 호출 전에 상태를 "소비"(consume) — 한 번만 표시되도록
+if od is not None:
+    st.session_state.open_dialog = None
 
 if od == "add":
     dialog_form(existing=None)
