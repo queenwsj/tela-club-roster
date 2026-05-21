@@ -284,11 +284,14 @@ def dialog_form(existing=None):
             value=existing["dormant_period"] if existing else "",
             placeholder="예: 2024-01-01~2024-12-31")
     with c10:
-        ld_val = None
+        ld_str_existing = ""
         if existing and existing.get("leave_date"):
-            try: ld_val = datetime.strptime(str(existing["leave_date"]),"%Y-%m-%d").date()
-            except: pass
-        leave_date = st.date_input("탈퇴일 (입력 시 구분 자동→탈퇴)", value=ld_val)
+            ld_str_existing = str(existing["leave_date"]).strip()
+        leave_date_str = st.text_input(
+            "탈퇴일 (입력 시 구분 자동→탈퇴)",
+            value=ld_str_existing,
+            placeholder="YYYY-MM-DD (비우면 탈퇴 해제)"
+        )
 
     # 행5: 입회신청서 / 메모
     c11,c12 = st.columns([1,2])
@@ -371,7 +374,13 @@ def dialog_form(existing=None):
                 try: by = int(birth_year.strip())
                 except: pass
 
-            ld_str    = leave_date.strftime("%Y-%m-%d") if leave_date else ""
+            ld_str = leave_date_str.strip()
+            if ld_str:
+                try:
+                    datetime.strptime(ld_str, "%Y-%m-%d")
+                except ValueError:
+                    st.error("❗ 탈퇴일 형식이 올바르지 않습니다. (예: 2026-01-01)")
+                    st.stop()
             final_cat = "탈퇴" if ld_str else cat
 
             row_data = {
@@ -406,7 +415,7 @@ def dialog_form(existing=None):
 st.markdown("""
 <div class="app-header">
   <span style="font-size:36px">🎾</span>
-  <div><h1>테라클럽 회원 명부</h1>
+  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.01)</span></h1>
   <p>TELA CLUB Member Roster · Google Sheets 연동</p></div>
 </div>""", unsafe_allow_html=True)
 
