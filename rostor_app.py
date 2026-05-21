@@ -115,7 +115,8 @@ for k, v in {
     "search_active": "",
     "open_dialog":   None,   # None | "add" | "edit" | "pw_edit" | "pw_delete" | "confirm_delete"
     "edit_target":   None,   # 수정/삭제 대상 {"id":int,"name":str,"type":str}
-    "pw_verified_id": None,  # 비번 인증 완료된 id
+    "pw_verified_id": None,  # 비번 인증 완료된 id (deprecated - 호환성 유지)
+    "admin_authed":   False, # 세션 전체 관리자 인증 플래그 (한 번 인증 시 세션 동안 유지)
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -186,12 +187,14 @@ def cell(txt, color="#374151", extra=""):
 def dialog_pw(target):
     action_label = "수정" if target["type"] == "edit" else "삭제"
     st.markdown(f"**[{target['name']}]** 회원 {action_label}을 위해 비밀번호를 입력하세요.")
+    st.caption("💡 한 번 인증하면 브라우저를 닫기 전까지 다시 묻지 않습니다.")
     pw = st.text_input("비밀번호", type="password", placeholder="비밀번호 입력")
     col_ok, col_cancel = st.columns(2)
     if col_ok.button("✅ 확인", type="primary", use_container_width=True):
         if pw == ADMIN_PASSWORD:
-            # 인증 성공 → 다음 다이얼로그로 이동
-            st.session_state.pw_verified_id = target["id"]
+            # 인증 성공 → 세션 전체 인증 플래그 설정
+            st.session_state.admin_authed = True
+            st.session_state.pw_verified_id = target["id"]  # 호환성 유지
             if target["type"] == "edit":
                 st.session_state.open_dialog = "edit"
             else:
@@ -203,7 +206,6 @@ def dialog_pw(target):
     if col_cancel.button("취소", use_container_width=True):
         st.session_state.open_dialog  = None
         st.session_state.edit_target  = None
-        st.session_state.pw_verified_id = None
         st.rerun()
 
 # ─────────────────────────────────────────────────────────
@@ -246,38 +248,40 @@ def dialog_confirm_delete(target):
     """, unsafe_allow_html=True)
     st.divider()
 
-    # 버튼 스타일 정의 (div 래퍼 기반)
+    # 버튼 스타일 (Streamlit 내장 .st-key-{key} 클래스 사용)
     st.markdown("""
     <style>
-    div.btn-confirm-del button {
+    .st-key-confirm_del_yes button {
         background: #ef4444 !important; color: #fff !important; border: none !important;
         font-weight: 700 !important; height: 42px !important;
     }
-    div.btn-confirm-del button:hover { background: #dc2626 !important; color: #fff !important; }
-    div.btn-confirm-cancel button {
+    .st-key-confirm_del_yes button:hover { background: #dc2626 !important; color: #fff !important; }
+    .st-key-confirm_del_yes button p { color: #fff !important; }
+    .st-key-confirm_del_no button {
         background: #6b7280 !important; color: #fff !important; border: none !important;
         font-weight: 700 !important; height: 42px !important;
     }
-    div.btn-confirm-cancel button:hover { background: #4b5563 !important; color: #fff !important; }
+    .st-key-confirm_del_no button:hover { background: #4b5563 !important; color: #fff !important; }
+    .st-key-confirm_del_no button p { color: #fff !important; }
     </style>
     """, unsafe_allow_html=True)
 
     cy, cn = st.columns([1, 1], gap="small")
     with cy:
-        st.markdown('<div class="btn-confirm-del">', unsafe_allow_html=True)
         if st.button("🗑️ 삭제 진행", use_container_width=True, key="confirm_del_yes"):
-            st.session_state.open_dialog = "pw_delete"
             st.session_state.edit_target = target
+            # 이미 세션 인증된 경우 비번 건너뛰고 바로 최종 삭제 확인으로
+            if st.session_state.admin_authed:
+                st.session_state.open_dialog = "delete_confirm"
+            else:
+                st.session_state.open_dialog = "pw_delete"
             st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
     with cn:
-        st.markdown('<div class="btn-confirm-cancel">', unsafe_allow_html=True)
         if st.button("✕ 취소", use_container_width=True, key="confirm_del_no"):
             st.session_state.open_dialog   = None
             st.session_state.edit_target   = None
             st.session_state.pw_verified_id = None
             st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
 
 
 
@@ -360,27 +364,31 @@ def dialog_form(existing=None):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── 버튼 색상: div 래퍼 클래스 기반 (확실하게 적용됨) ──
+    # ── 버튼 색상: Streamlit 내장 .st-key-{key} 클래스 사용 (가장 안정적) ──
+    # st.button(key="xxx") → 자동으로 .st-key-xxx 클래스 부여됨
     st.markdown("""
     <style>
     /* 저장 (파랑) */
-    div.btn-save button {
+    .st-key-form_save button {
         background: #2563eb !important; color: #fff !important; border: none !important;
         font-weight: 700 !important;
     }
-    div.btn-save button:hover { background: #1d4ed8 !important; color: #fff !important; }
+    .st-key-form_save button:hover { background: #1d4ed8 !important; color: #fff !important; }
+    .st-key-form_save button p { color: #fff !important; }
     /* 취소 (회색) */
-    div.btn-cancel button {
+    .st-key-form_cancel button {
         background: #6b7280 !important; color: #fff !important; border: none !important;
         font-weight: 700 !important;
     }
-    div.btn-cancel button:hover { background: #4b5563 !important; color: #fff !important; }
+    .st-key-form_cancel button:hover { background: #4b5563 !important; color: #fff !important; }
+    .st-key-form_cancel button p { color: #fff !important; }
     /* 삭제 (빨강) */
-    div.btn-delete button {
+    .st-key-form_delete button {
         background: #ef4444 !important; color: #fff !important; border: none !important;
         font-weight: 700 !important;
     }
-    div.btn-delete button:hover { background: #dc2626 !important; color: #fff !important; }
+    .st-key-form_delete button:hover { background: #dc2626 !important; color: #fff !important; }
+    .st-key-form_delete button p { color: #fff !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -391,19 +399,13 @@ def dialog_form(existing=None):
         bd = None
 
     with bs:
-        st.markdown('<div class="btn-save">', unsafe_allow_html=True)
         save_clicked = st.button("💾 저장", use_container_width=True, key="form_save")
-        st.markdown('</div>', unsafe_allow_html=True)
     with bc:
-        st.markdown('<div class="btn-cancel">', unsafe_allow_html=True)
         cancel_clicked = st.button("✕ 취소", use_container_width=True, key="form_cancel")
-        st.markdown('</div>', unsafe_allow_html=True)
     delete_clicked = False
     if bd:
         with bd:
-            st.markdown('<div class="btn-delete">', unsafe_allow_html=True)
             delete_clicked = st.button("🗑️ 삭제", use_container_width=True, key="form_delete")
-            st.markdown('</div>', unsafe_allow_html=True)
 
     if cancel_clicked:
         st.session_state.open_dialog    = None
@@ -471,6 +473,22 @@ st.markdown("""
   <p>TELA CLUB Member Roster · Google Sheets 연동</p></div>
 </div>""", unsafe_allow_html=True)
 
+# 관리자 인증 상태 표시 (인증된 경우만)
+if st.session_state.admin_authed:
+    auth_col1, auth_col2 = st.columns([6, 1])
+    with auth_col1:
+        st.markdown(
+            "<div style='background:#d1fae5;border-left:4px solid #10b981;"
+            "padding:6px 12px;border-radius:6px;font-size:12px;color:#065f46;font-weight:600;'>"
+            "🔓 관리자 인증됨 — 이 세션에서는 비밀번호 재입력 없이 수정/삭제 가능합니다."
+            "</div>", unsafe_allow_html=True)
+    with auth_col2:
+        if st.button("🔒 로그아웃", use_container_width=True, key="admin_logout"):
+            st.session_state.admin_authed = False
+            st.session_state.pw_verified_id = None
+            st.rerun()
+
+
 # ─────────────────────────────────────────────────────────
 #  데이터 로드
 # ─────────────────────────────────────────────────────────
@@ -490,7 +508,7 @@ et = st.session_state.edit_target
 if od == "add":
     dialog_form(existing=None)
 
-elif od == "edit" and et and st.session_state.pw_verified_id == et["id"]:
+elif od == "edit" and et and st.session_state.admin_authed:
     existing_row = None
     if not df.empty:
         rows = df[df["id"] == et["id"]]
@@ -501,7 +519,7 @@ elif od == "edit" and et and st.session_state.pw_verified_id == et["id"]:
 elif od == "confirm_delete" and et:
     dialog_confirm_delete(et)
 
-elif od == "delete_confirm" and et and st.session_state.pw_verified_id == et["id"]:
+elif od == "delete_confirm" and et and st.session_state.admin_authed:
     dialog_delete(et)
 
 elif od in ("pw_edit", "pw_delete") and et:
@@ -647,9 +665,13 @@ else:
         with rc[13]:
             st.markdown("<div class='edit-col'>", unsafe_allow_html=True)
             if st.button("✏️ 수정", key=f"edit_{row['id']}", use_container_width=True):
-                st.session_state.open_dialog   = "pw_edit"
-                st.session_state.edit_target   = {"type":"edit","id":int(row["id"]),"name":row["name"]}
-                st.session_state.pw_verified_id = None
+                target = {"type":"edit","id":int(row["id"]),"name":row["name"]}
+                st.session_state.edit_target = target
+                # 이미 세션 인증된 경우 비번 건너뛰고 바로 수정 화면으로
+                if st.session_state.admin_authed:
+                    st.session_state.open_dialog = "edit"
+                else:
+                    st.session_state.open_dialog = "pw_edit"
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
