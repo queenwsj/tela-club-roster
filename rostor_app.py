@@ -220,6 +220,51 @@ def validate_date(s):
     except ValueError:
         return False
 
+def normalize_date(s):
+    """다양한 입력 형식을 YYYY-MM-DD로 자동 변환.
+    지원 입력:
+    - 8자리 숫자: 20260101 → 2026-01-01
+    - 6자리 숫자: 260101 → 2026-01-01 (20xx로 가정)
+    - 하이픈/슬래시/점 구분: 2026-01-01, 2026/01/01, 2026.01.01 → 2026-01-01
+    - 빈 문자열: 그대로 빈 문자열 반환
+    유효하지 않으면 원본 그대로 반환 (검증은 별도)
+    """
+    if not s: return ""
+    s = str(s).strip()
+    if not s: return ""
+
+    # 1) 구분자(- / .) 모두 하이픈으로 통일
+    cleaned = re.sub(r"[/.]", "-", s)
+
+    # 2) 이미 YYYY-MM-DD 형식이면 그대로
+    if DATE_RE.match(cleaned):
+        try:
+            d = datetime.strptime(cleaned, "%Y-%m-%d")
+            return d.strftime("%Y-%m-%d")
+        except ValueError:
+            return s  # 잘못된 날짜는 원본 반환
+
+    # 3) 숫자만 추출
+    digits = re.sub(r"\D", "", s)
+
+    if len(digits) == 8:
+        # YYYYMMDD
+        try:
+            d = datetime.strptime(digits, "%Y%m%d")
+            return d.strftime("%Y-%m-%d")
+        except ValueError:
+            return s
+    elif len(digits) == 6:
+        # YYMMDD (20xx로 가정)
+        try:
+            d = datetime.strptime("20" + digits, "%Y%m%d")
+            return d.strftime("%Y-%m-%d")
+        except ValueError:
+            return s
+
+    # 변환 불가 시 원본 반환 (저장 검증 단계에서 걸러짐)
+    return s
+
 def validate_birth_year(y):
     if y is None or y == "": return True
     try:
@@ -442,7 +487,7 @@ def dialog_form(existing=None):
         email = st.text_input("이메일",
             value=existing["email"] if existing else "", placeholder="example@email.com")
 
-    # 행4: 휴면기간 (누적 관리) / 탈퇴일
+    # 행4: 휴면기간 (누적 관리) — 폭 전체 사용 (행 단위 입력이라 넓게)
     # ─────────────────────────────────────────────────────────
     # 휴면 기간 세션 초기화: 이 다이얼로그가 처음 열릴 때만 기존 값 로드
     # (다른 위젯 조작으로 인한 rerun에서는 기존 편집 상태 유지)
@@ -454,21 +499,22 @@ def dialog_form(existing=None):
         else:
             st.session_state[dorm_session_key] = []
 
-    c9_label, c10 = st.columns([1,1])
-    with c9_label:
-        st.markdown("**휴면 기간** <span style='font-size:11px;color:#6b7280;'>(진행중이면 자동→휴면, 모두 종료 시 자동→정회원)</span>", unsafe_allow_html=True)
-    with c10:
-        ld_str_existing = ""
-        if existing and existing.get("leave_date"):
-            ld_str_existing = str(existing["leave_date"]).strip()
-        leave_date_str = st.text_input(
-            "탈퇴일 (입력 시 구분 자동→탈퇴)",
-            value=ld_str_existing,
-            placeholder="YYYY-MM-DD (비우면 탈퇴 해제)"
-        )
+    # ── 콜백 함수: 다이얼로그 안에서는 st.rerun()을 호출하면 다이얼로그가 닫혀버림
+    # 콜백은 다이얼로그를 닫지 않고 세션 상태만 변경한 뒤 자연스럽게 리렌더됨
+    def _add_dormant_row(key=dorm_session_key):
+        st.session_state[key].append({"start": "", "end": ""})
 
-    # ─── 휴면 기간 입력 행들 (누적 관리) ───
-    dorm_list = st.session_state[dorm_session_key]
+    def _delete_dormant_row(key, idx):
+        if 0 <= idx < len(st.session_state[key]):
+            st.session_state[key].pop(idx)
+
+    def _normalize_date_input(widget_key):
+        """텍스트 입력의 값을 정규화된 날짜로 자동 변환"""
+        v = st.session_state.get(widget_key, "")
+        if v:
+            st.session_state[widget_key] = normalize_date(v)
+
+    st.markdown("**휴면 기간** <span style='font-size:11px;color:#6b7280;'>(진행중이면 자동→휴면, 모두 종료 시 자동→정회원)</span>", unsafe_allow_html=True)
 
     # 휴면 기간 행 스타일
     st.markdown("""
@@ -485,28 +531,37 @@ def dialog_form(existing=None):
     </style>
     """, unsafe_allow_html=True)
 
+    dorm_list = st.session_state[dorm_session_key]
+
     if not dorm_list:
         st.caption("📭 등록된 휴면 기간이 없습니다. 아래 '+ 기간 추가' 버튼으로 추가하세요.")
     else:
         for i, p in enumerate(dorm_list):
             st.markdown('<div class="dormant-row-wrap">', unsafe_allow_html=True)
-            rc_lbl, rc_start, rc_end, rc_status, rc_del = st.columns([0.5, 1.5, 1.5, 1, 0.6])
+            rc_lbl, rc_start, rc_end, rc_status, rc_del = st.columns([0.4, 1.5, 1.5, 1, 0.5])
             with rc_lbl:
                 st.markdown(f"<div style='padding-top:8px;font-weight:700;color:#854d0e;{FS}'>#{i+1}</div>", unsafe_allow_html=True)
             with rc_start:
-                new_start = st.text_input(
-                    "시작일", value=p["start"],
-                    key=f"dorm_start_{target_id}_{i}",
-                    placeholder="YYYY-MM-DD", label_visibility="collapsed"
+                start_key = f"dorm_start_{target_id}_{i}"
+                # session에 위젯 값이 없으면 초기값 세팅
+                if start_key not in st.session_state:
+                    st.session_state[start_key] = p["start"]
+                st.text_input(
+                    "시작일", key=start_key,
+                    placeholder="YYYY-MM-DD 또는 20260101", label_visibility="collapsed",
+                    on_change=_normalize_date_input, args=(start_key,)
                 )
-                dorm_list[i]["start"] = new_start.strip()
+                dorm_list[i]["start"] = st.session_state[start_key].strip()
             with rc_end:
-                new_end = st.text_input(
-                    "종료일", value=p["end"],
-                    key=f"dorm_end_{target_id}_{i}",
-                    placeholder="YYYY-MM-DD (비우면 진행중)", label_visibility="collapsed"
+                end_key = f"dorm_end_{target_id}_{i}"
+                if end_key not in st.session_state:
+                    st.session_state[end_key] = p["end"]
+                st.text_input(
+                    "종료일", key=end_key,
+                    placeholder="YYYY-MM-DD (비우면 진행중)", label_visibility="collapsed",
+                    on_change=_normalize_date_input, args=(end_key,)
                 )
-                dorm_list[i]["end"] = new_end.strip()
+                dorm_list[i]["end"] = st.session_state[end_key].strip()
             with rc_status:
                 is_ongoing = not dorm_list[i]["end"]
                 status_html = ("<span style='color:#ca8a04;font-weight:700;'>🟡 진행중</span>"
@@ -514,16 +569,31 @@ def dialog_form(existing=None):
                                "<span style='color:#16a34a;font-weight:700;'>✅ 종료</span>")
                 st.markdown(f"<div style='padding-top:8px;{FS}'>{status_html}</div>", unsafe_allow_html=True)
             with rc_del:
-                if st.button("🗑️", key=f"dorm_del_{target_id}_{i}",
-                             use_container_width=True, help="이 기간 삭제"):
-                    st.session_state[dorm_session_key].pop(i)
-                    st.rerun()
+                # ⚠️ 콜백 사용 — 다이얼로그 안에서 st.rerun() 호출 금지 (다이얼로그 튕김 원인)
+                st.button("🗑️", key=f"dorm_del_{target_id}_{i}",
+                          use_container_width=True, help="이 기간 삭제",
+                          on_click=_delete_dormant_row, args=(dorm_session_key, i))
             st.markdown('</div>', unsafe_allow_html=True)
 
-    # + 기간 추가 버튼
-    if st.button("➕ 휴면 기간 추가", use_container_width=True, key="add_dormant_btn"):
-        st.session_state[dorm_session_key].append({"start": "", "end": ""})
-        st.rerun()
+    # + 기간 추가 버튼 — 콜백 방식 (rerun 금지)
+    st.button("➕ 휴면 기간 추가", use_container_width=True, key="add_dormant_btn",
+              on_click=_add_dormant_row)
+
+    # ─── 탈퇴일 (휴면 아래) ───
+    ld_str_existing = ""
+    if existing and existing.get("leave_date"):
+        ld_str_existing = str(existing["leave_date"]).strip()
+    ld_key = f"leave_date_input_{target_id}"
+    if ld_key not in st.session_state:
+        st.session_state[ld_key] = ld_str_existing
+    st.text_input(
+        "탈퇴일 (입력 시 구분 자동→탈퇴)",
+        key=ld_key,
+        placeholder="YYYY-MM-DD 또는 20260101 (비우면 탈퇴 해제)",
+        on_change=_normalize_date_input, args=(ld_key,)
+    )
+    leave_date_str = st.session_state[ld_key]
+
 
     # 행5: 입회신청서 / 메모
     c11,c12 = st.columns([1,2])
@@ -584,18 +654,27 @@ def dialog_form(existing=None):
         with bd:
             delete_clicked = st.button("🗑️ 삭제", use_container_width=True, key="form_delete")
 
-    if cancel_clicked:
-        # 휴면 편집 세션 정리
+    # ── 다이얼로그 종료 시 휴면 관련 위젯 세션 전부 정리하는 헬퍼 ──
+    def _cleanup_dormant_session():
+        # 리스트
         if dorm_session_key in st.session_state:
             del st.session_state[dorm_session_key]
+        # 각 행의 위젯 키들 (dorm_start_*, dorm_end_*)
+        for k in list(st.session_state.keys()):
+            if k.startswith(f"dorm_start_{target_id}_") or k.startswith(f"dorm_end_{target_id}_"):
+                del st.session_state[k]
+        # 탈퇴일 위젯
+        if f"leave_date_input_{target_id}" in st.session_state:
+            del st.session_state[f"leave_date_input_{target_id}"]
+
+    if cancel_clicked:
+        _cleanup_dormant_session()
         st.session_state.open_dialog    = None
         st.session_state.edit_target    = None
         st.rerun()
 
     if delete_clicked and existing:
-        # 휴면 편집 세션 정리
-        if dorm_session_key in st.session_state:
-            del st.session_state[dorm_session_key]
+        _cleanup_dormant_session()
         st.session_state.open_dialog    = "confirm_delete"
         st.session_state.edit_target    = {"type":"delete","id":existing["id"],"name":existing["name"]}
         st.rerun()
@@ -626,27 +705,27 @@ def dialog_form(existing=None):
         if email.strip() and not validate_email(email.strip()):
             errors.append("이메일 형식이 올바르지 않습니다.")
 
-        # 5. 탈퇴일 형식
-        ld_str = leave_date_str.strip()
+        # 5. 탈퇴일 — 정규화 후 형식 검증 (방어적: 콜백이 발화 안 된 경우 대비)
+        ld_str = normalize_date(leave_date_str.strip())
         if ld_str and not validate_date(ld_str):
             errors.append("탈퇴일 형식이 올바르지 않습니다. (YYYY-MM-DD)")
 
-        # 6. 휴면 기간 검증 (세션 리스트 → 문자열 조립)
+        # 6. 휴면 기간 검증 (세션 리스트 → 문자열 조립, 정규화 포함)
         # 빈 행은 제거하고, 시작일이 있는 것만 보존
         clean_dorm_list = []
         for i, p in enumerate(dorm_list):
-            s = (p.get("start") or "").strip()
-            e = (p.get("end") or "").strip()
+            s = normalize_date((p.get("start") or "").strip())
+            e = normalize_date((p.get("end") or "").strip())
             if not s and not e:
                 continue  # 완전 빈 행은 무시
             if not s:
                 errors.append(f"휴면 기간 #{i+1}: 시작일이 비어있습니다.")
                 continue
             if not validate_date(s):
-                errors.append(f"휴면 기간 #{i+1}: 시작일 형식이 올바르지 않습니다. (YYYY-MM-DD)")
+                errors.append(f"휴면 기간 #{i+1}: 시작일 형식이 올바르지 않습니다. (예: 2026-01-01 또는 20260101)")
                 continue
             if e and not validate_date(e):
-                errors.append(f"휴면 기간 #{i+1}: 종료일 형식이 올바르지 않습니다. (YYYY-MM-DD)")
+                errors.append(f"휴면 기간 #{i+1}: 종료일 형식이 올바르지 않습니다. (예: 2026-01-01 또는 20260101)")
                 continue
             if e and s > e:
                 errors.append(f"휴면 기간 #{i+1}: 종료일이 시작일보다 빠를 수 없습니다.")
@@ -700,9 +779,7 @@ def dialog_form(existing=None):
                 save_row(df, row_data, is_new=(existing is None))
 
             st.success(f"✅ {'수정' if existing else '등록'} 완료! — {final_cat} {name.strip()}")
-            # 휴면 편집 세션 정리
-            if dorm_session_key in st.session_state:
-                del st.session_state[dorm_session_key]
+            _cleanup_dormant_session()
             st.session_state.open_dialog    = None
             st.session_state.edit_target    = None
             st.cache_resource.clear()
@@ -714,7 +791,7 @@ def dialog_form(existing=None):
 st.markdown("""
 <div class="app-header">
   <span style="font-size:36px">🎾</span>
-  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.03)</span></h1>
+  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.04)</span></h1>
   <p>TELA CLUB Member Roster · Google Sheets 연동</p></div>
 </div>""", unsafe_allow_html=True)
 
