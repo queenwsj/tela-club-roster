@@ -113,7 +113,7 @@ for k, v in {
     "filter_cat":    "전체",
     "search_q":      "",
     "search_active": "",
-    "open_dialog":   None,   # None | "add" | "edit" | "pw_edit" | "pw_delete"
+    "open_dialog":   None,   # None | "add" | "edit" | "pw_edit" | "pw_delete" | "confirm_delete"
     "edit_target":   None,   # 수정/삭제 대상 {"id":int,"name":str,"type":str}
     "pw_verified_id": None,  # 비번 인증 완료된 id
 }.items():
@@ -228,8 +228,44 @@ def dialog_delete(target):
         st.rerun()
 
 # ─────────────────────────────────────────────────────────
-#  팝업 다이얼로그: 회원 등록 / 수정 폼
+#  팝업 다이얼로그: 삭제 1차 확인 (비번 전 경고)
 # ─────────────────────────────────────────────────────────
+@st.dialog("⚠️ 회원 삭제 확인")
+def dialog_confirm_delete(target):
+    st.markdown(f"""
+    <div style="text-align:center; padding: 8px 0 16px;">
+        <div style="font-size:48px; margin-bottom:12px;">🚨</div>
+        <div style="font-size:17px; font-weight:700; color:#1a2e4a; margin-bottom:8px;">
+            정말로 삭제하시겠습니까?
+        </div>
+        <div style="font-size:14px; color:#6b7280; line-height:1.6;">
+            <b style="color:#dc2626;">[{target['name']}]</b> 회원의 모든 정보가<br>
+            영구적으로 삭제되며 복구할 수 없습니다.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.divider()
+    cy, cn = st.columns(2)
+    with cy:
+        st.markdown("""
+        <style>
+        button[aria-label="confirm_del_yes"] {
+            background: #ef4444 !important; color: #fff !important; border: none !important;
+        }
+        button[aria-label="confirm_del_yes"]:hover { background: #dc2626 !important; }
+        </style>""", unsafe_allow_html=True)
+        if st.button("🗑️ 삭제 진행", use_container_width=True, key="confirm_del_yes"):
+            st.session_state.open_dialog = "pw_delete"
+            st.session_state.edit_target = target
+            st.rerun()
+    with cn:
+        if st.button("✕ 취소", use_container_width=True, key="confirm_del_no"):
+            st.session_state.open_dialog   = None
+            st.session_state.edit_target   = None
+            st.session_state.pw_verified_id = None
+            st.rerun()
+
+
 @st.dialog("회원 정보", width="large")
 def dialog_form(existing=None):
     title = "✏️ 회원 정보 수정" if existing else "➕ 새 회원 등록"
@@ -313,31 +349,31 @@ def dialog_form(existing=None):
     # Streamlit은 button에 aria-label=key 를 설정함
     st.markdown("""
     <style>
-    /* 저장 버튼 */
-    button[aria-label="form_save"],
-    button[data-testid="stBaseButton-primary"] {
+    /* ── 저장 버튼 (파랑) ── */
+    div[data-testid="stDialog"] button[kind="primary"],
+    div[data-testid="stDialog"] button[data-testid="stBaseButton-primary"] {
         background: #2563eb !important;
         color: #fff !important;
         border: none !important;
     }
-    /* 취소 버튼 */
+    div[data-testid="stDialog"] button[kind="primary"]:hover,
+    div[data-testid="stDialog"] button[data-testid="stBaseButton-primary"]:hover {
+        background: #1d4ed8 !important;
+    }
+    /* ── 취소 버튼 (회색) ── */
     button[aria-label="form_cancel"] {
         background: #6b7280 !important;
         color: #fff !important;
         border: none !important;
     }
-    /* 삭제 버튼 */
+    button[aria-label="form_cancel"]:hover { background: #4b5563 !important; }
+    /* ── 삭제 버튼 (빨강) ── */
     button[aria-label="form_delete"] {
         background: #ef4444 !important;
         color: #fff !important;
         border: none !important;
     }
-    button[aria-label="form_delete"]:hover {
-        background: #dc2626 !important;
-    }
-    button[aria-label="form_cancel"]:hover {
-        background: #4b5563 !important;
-    }
+    button[aria-label="form_delete"]:hover { background: #dc2626 !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -360,7 +396,7 @@ def dialog_form(existing=None):
         st.rerun()
 
     if delete_clicked and existing:
-        st.session_state.open_dialog    = "pw_delete"
+        st.session_state.open_dialog    = "confirm_delete"
         st.session_state.edit_target    = {"type":"delete","id":existing["id"],"name":existing["name"]}
         st.session_state.pw_verified_id = None
         st.rerun()
@@ -445,6 +481,9 @@ elif od == "edit" and et and st.session_state.pw_verified_id == et["id"]:
         if not rows.empty:
             existing_row = rows.iloc[0].to_dict()
     dialog_form(existing=existing_row)
+
+elif od == "confirm_delete" and et:
+    dialog_confirm_delete(et)
 
 elif od == "delete_confirm" and et and st.session_state.pw_verified_id == et["id"]:
     dialog_delete(et)
