@@ -1,6 +1,6 @@
 """
 테라클럽 회원 명부 - Streamlit Cloud + Google Sheets 버전
-실행: streamlit run tela_club_streamlit.py
+실행: streamlit run rostor_app.py
 """
 
 import re
@@ -10,7 +10,7 @@ import gspread
 from gspread.utils import rowcol_to_a1
 from google.oauth2.service_account import Credentials
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 st.set_page_config(
     page_title="테라클럽 회원 명부",
@@ -32,7 +32,10 @@ COLUMNS = [
     "id", "category", "name", "cafe_id", "birth_year", "gender",
     "phone", "region", "join_date", "dormant_period", "leave_date",
     "email", "application", "memo", "updated_at",
+    "deleted_at",   # 소프트 삭제: 삭제 시각. 비어있으면 정상 회원.
 ]
+AUDIT_COLUMNS = ["timestamp", "action", "member_id", "member_name", "detail"]
+TRASH_DAYS    = 90   # 휴지통 보관 기간 (일)
 CATEGORIES   = ["마스터","고문","회장","총무","경기이사","홍보이사","정회원","휴면","탈퇴"]
 CAT_ORDER    = {c: i for i, c in enumerate(CATEGORIES)}
 OFFICER_CATS = ["마스터","고문","회장","총무","경기이사","홍보이사"]
@@ -119,61 +122,137 @@ for k, v in {
     "filter_cat":    "전체",
     "search_q":      "",
     "search_active": "",
-    "open_dialog":   None,   # None | "add" | "edit" | "pw_edit" | "pw_delete" | "confirm_delete" | "delete_confirm"
-    "edit_target":   None,   # 수정/삭제 대상 {"id":int,"name":str,"type":str}
-    "admin_authed":  False,  # 세션 전체 관리자 인증 플래그
+    "open_dialog":   None,
+    "edit_target":   None,
+    "admin_authed":  False,
+    "auth_time":     None,   # 관리자 인증 시각 (타임아웃용)
+    "show_trash":    False,  # 휴지통 보기 토글
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# ── 세션 타임아웃 체크 (1시간) ────────────────────────────
+SESSION_TIMEOUT_MIN = 60
+if st.session_state.admin_authed and st.session_state.auth_time:
+    elapsed = (datetime.now() - st.session_state.auth_time).total_seconds() / 60
+    if elapsed >= SESSION_TIMEOUT_MIN:
+        st.session_state.admin_authed = False
+        st.session_state.auth_time    = None
+        st.toast("⏰ 관리자 세션이 만료되었습니다. 다시 인증해 주세요.", icon="🔒")
 
 # ── Google Sheets ─────────────────────────────────────────
 @st.cache_resource
 def get_sheet():
     creds  = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
     client = gspread.authorize(creds)
-    sheet  = client.open_by_key(st.secrets["SHEET_ID"]).sheet1
+    wb     = client.open_by_key(st.secrets["SHEET_ID"])
+    sheet  = wb.sheet1
     if sheet.row_count == 0 or sheet.cell(1,1).value != "id":
         sheet.insert_row(COLUMNS, 1)
     return sheet
 
-def load_df():
+@st.cache_resource
+def get_audit_sheet():
+    """변경 이력 시트 (audit_log 탭). 없으면 자동 생성."""
+    creds  = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
+    client = gspread.authorize(creds)
+    wb     = client.open_by_key(st.secrets["SHEET_ID"])
+    try:
+        asheet = wb.worksheet("audit_log")
+    except gspread.exceptions.WorksheetNotFound:
+        asheet = wb.add_worksheet(title="audit_log", rows=2000, cols=len(AUDIT_COLUMNS))
+        asheet.insert_row(AUDIT_COLUMNS, 1)
+    return asheet
+
+def log_audit(action: str, member_id, member_name: str, detail: str = ""):
+    """변경 이력을 audit_log 시트에 기록. 실패해도 메인 기능에 영향 없도록 try/except."""
+    try:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        get_audit_sheet().append_row(
+            [ts, action, str(member_id), member_name, detail],
+            value_input_option="USER_ENTERED"
+        )
+    except Exception:
+        pass  # 로그 실패는 조용히 무시
+
+def load_df(include_deleted=False):
     records = get_sheet().get_all_records(expected_headers=COLUMNS)
     if not records:
         return pd.DataFrame(columns=COLUMNS)
     df = pd.DataFrame(records)
     df["id"]         = pd.to_numeric(df["id"],         errors="coerce").fillna(0).astype(int)
     df["birth_year"] = pd.to_numeric(df["birth_year"], errors="coerce")
+    if "deleted_at" not in df.columns:
+        df["deleted_at"] = ""
+    if not include_deleted:
+        df = df[df["deleted_at"].astype(str).str.strip() == ""]
     return df
 
-def save_row(df, row, is_new):
+def save_row(df, row, is_new, action_detail=""):
     sheet = get_sheet()
     row["updated_at"] = datetime.today().strftime("%Y-%m-%d %H:%M")
+    if "deleted_at" not in row:
+        row["deleted_at"] = ""
     values = [str(row.get(c,"") or "") for c in COLUMNS]
+    action = "등록" if is_new else "수정"
     if is_new:
         sheet.append_row(values, value_input_option="USER_ENTERED")
     else:
         all_ids = sheet.col_values(1)
         try:
-            ri = all_ids.index(str(row["id"])) + 1
-            # gspread.utils.rowcol_to_a1로 안전하게 A1 변환 (컬럼 27개 넘어도 OK)
+            ri         = all_ids.index(str(row["id"])) + 1
             start_cell = rowcol_to_a1(ri, 1)
             end_cell   = rowcol_to_a1(ri, len(COLUMNS))
             sheet.update(f"{start_cell}:{end_cell}", [values], value_input_option="USER_ENTERED")
         except ValueError:
             sheet.append_row(values, value_input_option="USER_ENTERED")
+    log_audit(action, row.get("id",""), row.get("name",""), action_detail or f"카테고리:{row.get('category','')}")
 
-def delete_row(mid):
+def soft_delete_row(mid, member_name):
+    """소프트 삭제: deleted_at 컬럼에 현재 시각을 기록. 행은 보존됨."""
     sheet   = get_sheet()
     all_ids = sheet.col_values(1)
-    # 헤더 행 안전성 검증: 첫 행이 "id"인지 확인 (헤더가 사라졌으면 위험)
     if not all_ids or all_ids[0] != "id":
-        raise RuntimeError("시트 헤더가 손상되었습니다. 관리자에게 문의하세요.")
+        raise RuntimeError("시트 헤더가 손상되었습니다.")
     try:
         idx = all_ids.index(str(mid))
-        # ID가 헤더 위치(0)에 있으면 절대 삭제하지 않음
+        if idx == 0:
+            raise RuntimeError("헤더 행은 삭제할 수 없습니다.")
+        ri         = idx + 1
+        del_col    = COLUMNS.index("deleted_at") + 1
+        del_cell   = rowcol_to_a1(ri, del_col)
+        sheet.update(del_cell, [[datetime.now().strftime("%Y-%m-%d %H:%M:%S")]],
+                     value_input_option="USER_ENTERED")
+        log_audit("삭제(소프트)", mid, member_name, f"휴지통 이동. {TRASH_DAYS}일 후 영구 삭제.")
+    except ValueError:
+        pass
+
+def hard_delete_row(mid, member_name):
+    """영구 삭제: 시트에서 행 자체를 제거."""
+    sheet   = get_sheet()
+    all_ids = sheet.col_values(1)
+    if not all_ids or all_ids[0] != "id":
+        raise RuntimeError("시트 헤더가 손상되었습니다.")
+    try:
+        idx = all_ids.index(str(mid))
         if idx == 0:
             raise RuntimeError("헤더 행은 삭제할 수 없습니다.")
         sheet.delete_rows(idx + 1)
+        log_audit("삭제(영구)", mid, member_name, "영구 삭제 완료.")
+    except ValueError:
+        pass
+
+def restore_row(mid, member_name):
+    """소프트 삭제 취소: deleted_at을 비워서 복구."""
+    sheet   = get_sheet()
+    all_ids = sheet.col_values(1)
+    try:
+        idx = all_ids.index(str(mid))
+        ri  = idx + 1
+        del_col  = COLUMNS.index("deleted_at") + 1
+        del_cell = rowcol_to_a1(ri, del_col)
+        sheet.update(del_cell, [[""]], value_input_option="USER_ENTERED")
+        log_audit("복구", mid, member_name, "휴지통에서 복구.")
     except ValueError:
         pass
 
@@ -213,72 +292,53 @@ def validate_email(s):
 
 def validate_date(s):
     if not s: return True
-    if not DATE_RE.match(s.strip()): return False
+    if not DATE_RE.match(str(s).strip()): return False
     try:
-        datetime.strptime(s.strip(), "%Y-%m-%d")
+        datetime.strptime(str(s).strip(), "%Y-%m-%d")
         return True
     except ValueError:
         return False
 
 def normalize_date(s):
     """다양한 입력 형식을 YYYY-MM-DD로 자동 변환.
-    지원 입력:
-    - 8자리 숫자: 20260101 → 2026-01-01
-    - 6자리 숫자: 260101 → 2026-01-01 (20xx로 가정)
-    - 하이픈/슬래시/점 구분: 2026-01-01, 2026/01/01, 2026.01.01 → 2026-01-01
-    - 빈 문자열: 그대로 빈 문자열 반환
-    유효하지 않으면 원본 그대로 반환 (검증은 별도)
+    - 8자리: 20260101 → 2026-01-01
+    - 6자리: 260101  → 2026-01-01
+    - 구분자 혼용: 2026/01/01, 2026.01.01 → 2026-01-01
     """
     if not s: return ""
     s = str(s).strip()
     if not s: return ""
-
-    # 1) 구분자(- / .) 모두 하이픈으로 통일
     cleaned = re.sub(r"[/.]", "-", s)
-
-    # 2) 이미 YYYY-MM-DD 형식이면 그대로
     if DATE_RE.match(cleaned):
         try:
-            d = datetime.strptime(cleaned, "%Y-%m-%d")
-            return d.strftime("%Y-%m-%d")
+            return datetime.strptime(cleaned, "%Y-%m-%d").strftime("%Y-%m-%d")
         except ValueError:
-            return s  # 잘못된 날짜는 원본 반환
-
-    # 3) 숫자만 추출
+            return s
     digits = re.sub(r"\D", "", s)
-
     if len(digits) == 8:
-        # YYYYMMDD
-        try:
-            d = datetime.strptime(digits, "%Y%m%d")
-            return d.strftime("%Y-%m-%d")
-        except ValueError:
-            return s
+        try: return datetime.strptime(digits, "%Y%m%d").strftime("%Y-%m-%d")
+        except ValueError: return s
     elif len(digits) == 6:
-        # YYMMDD (20xx로 가정)
-        try:
-            d = datetime.strptime("20" + digits, "%Y%m%d")
-            return d.strftime("%Y-%m-%d")
-        except ValueError:
-            return s
-
-    # 변환 불가 시 원본 반환 (저장 검증 단계에서 걸러짐)
+        try: return datetime.strptime("20" + digits, "%Y%m%d").strftime("%Y-%m-%d")
+        except ValueError: return s
     return s
 
-def validate_birth_year(y):
-    if y is None or y == "": return True
-    try:
-        y = int(y)
-        return 1900 <= y <= date.today().year
-    except (ValueError, TypeError):
-        return False
+def normalize_phone(s):
+    """연락처 자동 포맷팅: 01012345678 → 010-1234-5678"""
+    if not s: return ""
+    digits = re.sub(r"\D", "", str(s).strip())
+    if len(digits) == 11 and digits.startswith("010"):
+        return f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
+    elif len(digits) == 11:
+        return f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
+    elif len(digits) == 10:
+        return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+    return s  # 변환 불가 시 원본
 
 # ─────────────────────────────────────────────────────────
 # 휴면 기간 관리 (누적)
-# 형식: "YYYY-MM-DD~YYYY-MM-DD; YYYY-MM-DD~"  (세미콜론으로 구분, 끝 날짜 비우면 진행중)
 # ─────────────────────────────────────────────────────────
 def parse_dormant_periods(s):
-    """누적된 휴면 기간 문자열을 리스트로 변환"""
     if not s or not str(s).strip(): return []
     periods = []
     for chunk in str(s).split(";"):
@@ -292,7 +352,6 @@ def parse_dormant_periods(s):
     return periods
 
 def format_dormant_periods(periods):
-    """리스트 → 저장용 문자열"""
     parts = []
     for p in periods:
         start = (p.get("start") or "").strip()
@@ -301,33 +360,38 @@ def format_dormant_periods(periods):
         parts.append(f"{start}~{end}")
     return "; ".join(parts)
 
-def validate_dormant_period_str(s):
-    """휴면기간 문자열 형식 검증 - 'YYYY-MM-DD~' 또는 'YYYY-MM-DD~YYYY-MM-DD' 형식만 허용"""
-    if not s: return True
-    for chunk in str(s).split(";"):
-        chunk = chunk.strip()
-        if not chunk: continue
-        if not DORMANT_RANGE_RE.match(chunk): return False
-        start, _, end = chunk.partition("~")
-        if not validate_date(start): return False
-        if end and not validate_date(end): return False
-    return True
-
 def has_ongoing_dormant(s):
-    """진행중인(end가 없는) 휴면 기간이 있는지"""
-    for p in parse_dormant_periods(s):
-        if not p["end"]: return True
-    return False
+    return any(not p["end"] for p in parse_dormant_periods(s))
+
+def check_dormant_overlap(periods):
+    """휴면 기간 겹침 및 진행중 중복 검사. 문제 있으면 에러 문자열 반환, 없으면 None."""
+    ongoing_count = 0
+    date_ranges = []
+    for i, p in enumerate(periods):
+        s = p.get("start","")
+        e = p.get("end","")
+        if not e:
+            ongoing_count += 1
+            if ongoing_count > 1:
+                return f"진행중 휴면 기간이 2개 이상입니다. 1개만 허용됩니다."
+        else:
+            try:
+                sd = datetime.strptime(s, "%Y-%m-%d").date()
+                ed = datetime.strptime(e, "%Y-%m-%d").date()
+                for j, (psd, ped) in enumerate(date_ranges):
+                    if sd <= ped and ed >= psd:
+                        return f"#{i+1}번 기간이 #{j+1}번 기간과 겹칩니다."
+                date_ranges.append((sd, ed))
+            except ValueError:
+                pass
+    return None
 
 def check_duplicate(df, name, phone, cafe_id, exclude_id=None):
-    """중복 검사: 이름+연락처 또는 카페ID. 중복되면 사유 문자열 반환, 없으면 None"""
     if df.empty: return None
     target = df[df["id"] != exclude_id] if exclude_id is not None else df
-
-    name_n = (name or "").strip()
+    name_n  = (name or "").strip()
     phone_n = (phone or "").strip()
-    cafe_n = (cafe_id or "").strip()
-
+    cafe_n  = (cafe_id or "").strip()
     if name_n and phone_n:
         dup = target[(target["name"].astype(str).str.strip() == name_n) &
                      (target["phone"].astype(str).str.strip() == phone_n)]
@@ -338,6 +402,54 @@ def check_duplicate(df, name, phone, cafe_id, exclude_id=None):
         if not dup.empty:
             return f"카페ID가 동일한 회원이 이미 있습니다 (No.{int(dup.iloc[0]['id'])} {dup.iloc[0]['name']})"
     return None
+
+# ─────────────────────────────────────────────────────────
+# 생일자 / 휴면 알림 헬퍼
+# ─────────────────────────────────────────────────────────
+def get_birthday_members(df):
+    """이번 달 생일자 (birth_year 있는 회원 기준)"""
+    today = date.today()
+    result = []
+    for _, row in df.iterrows():
+        bday = str(row.get("birth_month_day","") or "").strip()
+        # birth_year 컬럼에서 month는 없으므로 — join_date를 쓰거나 메모에서 MM-DD를 파싱
+        # 현재 데이터 구조: birth_year만 있고 month/day 없음 → 입회일 기준 이번 달 신규
+        pass
+    return result
+
+def get_this_month_birthdays(df):
+    """이번 달 입회 기념일 회원 (입회월 기준)"""
+    today = date.today()
+    result = []
+    for _, row in df.iterrows():
+        jd = str(row.get("join_date","") or "").strip()
+        if not jd: continue
+        try:
+            jdate = datetime.strptime(jd[:10], "%Y-%m-%d").date()
+            if jdate.month == today.month:
+                years = today.year - jdate.year
+                result.append({"name": row["name"], "join_date": jd, "years": years, "category": row["category"]})
+        except ValueError:
+            pass
+    return result
+
+def get_long_dormant_members(df, months=3):
+    """진행중 휴면이 N개월 이상인 회원 목록 반환"""
+    today   = date.today()
+    cutoff  = today - timedelta(days=months * 30)
+    result  = []
+    for _, row in df.iterrows():
+        if row.get("category") != "휴면": continue
+        for p in parse_dormant_periods(str(row.get("dormant_period","") or "")):
+            if not p["end"] and p["start"]:
+                try:
+                    sd = datetime.strptime(p["start"], "%Y-%m-%d").date()
+                    if sd <= cutoff:
+                        result.append({"name": row["name"], "start": p["start"],
+                                       "days": (today - sd).days})
+                except ValueError:
+                    pass
+    return result
 
 # ─────────────────────────────────────────────────────────
 #  팝업 다이얼로그: 관리자 비밀번호
@@ -353,6 +465,7 @@ def dialog_pw(target):
         if pw == ADMIN_PASSWORD:
             # 인증 성공 → 세션 전체 인증 플래그 설정
             st.session_state.admin_authed = True
+            st.session_state.auth_time    = datetime.now()   # 타임아웃 기산점
             if target["type"] == "edit":
                 st.session_state.open_dialog = "edit"
             else:
@@ -371,11 +484,14 @@ def dialog_pw(target):
 # ─────────────────────────────────────────────────────────
 @st.dialog("🗑️ 삭제 확인")
 def dialog_delete(target):
-    st.warning(f"**[{target['name']}]** 회원을 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다.")
+    st.warning(
+        f"**[{target['name']}]** 회원을 휴지통으로 이동합니다.\n\n"
+        f"휴지통에서 **{TRASH_DAYS}일 후 자동 영구 삭제**됩니다. 그 전에는 복구 가능합니다."
+    )
     cy, cn = st.columns(2)
-    if cy.button("삭제 확인", type="primary", use_container_width=True):
+    if cy.button("🗑️ 휴지통으로 이동", type="primary", use_container_width=True):
         with st.spinner("삭제 중…"):
-            delete_row(target["id"])
+            soft_delete_row(target["id"], target["name"])
         st.session_state.open_dialog   = None
         st.session_state.edit_target   = None
         st.cache_resource.clear()
@@ -697,46 +813,51 @@ def dialog_form(existing=None):
             except ValueError:
                 errors.append("생년은 4자리 숫자여야 합니다.")
 
-        # 3. 연락처 형식
-        if phone.strip() and not validate_phone(phone.strip()):
-            errors.append("연락처 형식이 올바르지 않습니다. (예: 010-1234-5678)")
+        # 3. 연락처 — 자동 포맷팅 후 형식 검증
+        phone_normalized = normalize_phone(phone.strip())
+        if phone_normalized and not validate_phone(phone_normalized):
+            errors.append("연락처 형식이 올바르지 않습니다. (예: 010-1234-5678 또는 01012345678)")
 
         # 4. 이메일 형식
         if email.strip() and not validate_email(email.strip()):
             errors.append("이메일 형식이 올바르지 않습니다.")
 
-        # 5. 탈퇴일 — 정규화 후 형식 검증 (방어적: 콜백이 발화 안 된 경우 대비)
+        # 5. 탈퇴일 — 정규화 후 형식 검증
         ld_str = normalize_date(leave_date_str.strip())
         if ld_str and not validate_date(ld_str):
             errors.append("탈퇴일 형식이 올바르지 않습니다. (YYYY-MM-DD)")
 
-        # 6. 휴면 기간 검증 (세션 리스트 → 문자열 조립, 정규화 포함)
-        # 빈 행은 제거하고, 시작일이 있는 것만 보존
+        # 6. 휴면 기간 검증 + 정규화 + 겹침 검사
         clean_dorm_list = []
         for i, p in enumerate(dorm_list):
             s = normalize_date((p.get("start") or "").strip())
             e = normalize_date((p.get("end") or "").strip())
-            if not s and not e:
-                continue  # 완전 빈 행은 무시
+            if not s and not e: continue
             if not s:
-                errors.append(f"휴면 기간 #{i+1}: 시작일이 비어있습니다.")
-                continue
+                errors.append(f"휴면 기간 #{i+1}: 시작일이 비어있습니다."); continue
             if not validate_date(s):
-                errors.append(f"휴면 기간 #{i+1}: 시작일 형식이 올바르지 않습니다. (예: 2026-01-01 또는 20260101)")
-                continue
+                errors.append(f"휴면 기간 #{i+1}: 시작일 형식 오류 (예: 20260101)"); continue
             if e and not validate_date(e):
-                errors.append(f"휴면 기간 #{i+1}: 종료일 형식이 올바르지 않습니다. (예: 2026-01-01 또는 20260101)")
-                continue
+                errors.append(f"휴면 기간 #{i+1}: 종료일 형식 오류 (예: 20260101)"); continue
             if e and s > e:
-                errors.append(f"휴면 기간 #{i+1}: 종료일이 시작일보다 빠를 수 없습니다.")
-                continue
+                errors.append(f"휴면 기간 #{i+1}: 종료일이 시작일보다 빠를 수 없습니다."); continue
             clean_dorm_list.append({"start": s, "end": e})
+
+        # 12번: 시작일 오름차순 자동 정렬
+        clean_dorm_list.sort(key=lambda p: p["start"])
+
+        # 11번: 겹침 검사
+        if not errors and clean_dorm_list:
+            overlap_err = check_dormant_overlap(clean_dorm_list)
+            if overlap_err:
+                errors.append(f"휴면 기간 겹침 오류: {overlap_err}")
+
         dorm_str = format_dormant_periods(clean_dorm_list)
 
-        # 7. 중복 검사 (신규 + 수정 모두)
+        # 7. 중복 검사
         if not errors:
             exclude_id = existing["id"] if existing else None
-            dup_msg = check_duplicate(df, name, phone, cafe_id, exclude_id=exclude_id)
+            dup_msg = check_duplicate(df, name, phone_normalized, cafe_id, exclude_id=exclude_id)
             if dup_msg:
                 errors.append(f"⚠️ {dup_msg}")
 
@@ -744,21 +865,20 @@ def dialog_form(existing=None):
             for e in errors:
                 st.error(f"❗ {e}")
         else:
-            # ── 카테고리 자동 결정 (우선순위: 탈퇴 > 진행중휴면 > 휴면종료시 정회원복귀 > 사용자선택) ──
-            had_dormant = bool(dorm_str)  # 휴면 기간 데이터가 있는지
+            # ── 카테고리 자동 결정 ──
+            had_dormant = bool(dorm_str)
             has_ongoing = had_dormant and any(not p["end"] for p in clean_dorm_list)
-
             if ld_str:
                 final_cat = "탈퇴"
             elif has_ongoing:
-                # 진행중 휴면 → 자동 휴면
                 final_cat = "휴면"
             elif had_dormant and cat == "휴면":
-                # 휴면 기간이 모두 종료되었고 현재 카테고리가 "휴면"이면 → 자동으로 정회원 복귀
                 final_cat = "정회원"
             else:
                 final_cat = cat
 
+            action_detail = (f"{'신규등록' if not existing else '수정'} → "
+                             f"카테고리:{final_cat}, 연락처:{phone_normalized}")
             row_data = {
                 "id":             existing["id"] if existing else next_id(df),
                 "category":       final_cat,
@@ -766,7 +886,7 @@ def dialog_form(existing=None):
                 "cafe_id":        cafe_id.strip(),
                 "birth_year":     by or "",
                 "gender":         gender,
-                "phone":          phone.strip(),
+                "phone":          phone_normalized,
                 "join_date":      join_date.strftime("%Y-%m-%d") if join_date else "",
                 "dormant_period": dorm_str,
                 "leave_date":     ld_str,
@@ -774,9 +894,10 @@ def dialog_form(existing=None):
                 "application":    "" if application=="—" else application,
                 "region":         region.strip(),
                 "memo":           memo.strip(),
+                "deleted_at":     "",
             }
             with st.spinner("구글 시트에 저장 중…"):
-                save_row(df, row_data, is_new=(existing is None))
+                save_row(df, row_data, is_new=(existing is None), action_detail=action_detail)
 
             st.success(f"✅ {'수정' if existing else '등록'} 완료! — {final_cat} {name.strip()}")
             _cleanup_dormant_session()
@@ -791,34 +912,66 @@ def dialog_form(existing=None):
 st.markdown("""
 <div class="app-header">
   <span style="font-size:36px">🎾</span>
-  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.05)</span></h1>
+  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.06)</span></h1>
   <p>TELA CLUB Member Roster · Google Sheets 연동</p></div>
 </div>""", unsafe_allow_html=True)
 
-# 관리자 인증 상태 표시 (인증된 경우만)
-if st.session_state.admin_authed:
+# 관리자 인증 상태 (타임아웃 잔여 시간 표시)
+if st.session_state.admin_authed and st.session_state.auth_time:
+    elapsed_min = int((datetime.now() - st.session_state.auth_time).total_seconds() / 60)
+    remain_min  = SESSION_TIMEOUT_MIN - elapsed_min
     auth_col1, auth_col2 = st.columns([6, 1])
     with auth_col1:
         st.markdown(
-            "<div style='background:#d1fae5;border-left:4px solid #10b981;"
-            "padding:6px 12px;border-radius:6px;font-size:12px;color:#065f46;font-weight:600;'>"
-            "🔓 관리자 인증됨 — 이 세션에서는 비밀번호 재입력 없이 수정/삭제 가능합니다."
-            "</div>", unsafe_allow_html=True)
+            f"<div style='background:#d1fae5;border-left:4px solid #10b981;"
+            f"padding:6px 12px;border-radius:6px;font-size:12px;color:#065f46;font-weight:600;'>"
+            f"🔓 관리자 인증됨 — 잔여 {remain_min}분 (총 {SESSION_TIMEOUT_MIN}분 세션)"
+            f"</div>", unsafe_allow_html=True)
     with auth_col2:
         if st.button("🔒 로그아웃", use_container_width=True, key="admin_logout"):
             st.session_state.admin_authed = False
+            st.session_state.auth_time    = None
             st.rerun()
-
 
 # ─────────────────────────────────────────────────────────
 #  데이터 로드
 # ─────────────────────────────────────────────────────────
 with st.spinner("📡 구글 시트에서 데이터 불러오는 중…"):
     try:
-        df = load_df()
+        df = load_df(include_deleted=False)
     except Exception as e:
         st.error(f"⚠️ Google Sheets 연결 오류: {e}")
         st.stop()
+
+# ── 알림 배지 계산 (데이터 로드 직후) ────────────────────
+anniversary_members = get_this_month_birthdays(df)
+long_dormant_members = get_long_dormant_members(df, months=3)
+
+# 알림 배지 표시
+notif_parts = []
+if anniversary_members:
+    notif_parts.append(f"🎾 이번 달 입회기념 **{len(anniversary_members)}명**")
+if long_dormant_members:
+    notif_parts.append(f"⚠️ 장기 휴면(3개월↑) **{len(long_dormant_members)}명** — 탈퇴 검토 필요")
+if notif_parts:
+    st.markdown(
+        "<div style='background:#fef3c7;border-left:4px solid #f59e0b;"
+        "padding:8px 14px;border-radius:8px;font-size:13px;color:#92400e;margin-bottom:8px;'>"
+        + " &nbsp;|&nbsp; ".join(notif_parts) +
+        "</div>", unsafe_allow_html=True)
+
+    # 상세 보기 (expander)
+    if anniversary_members or long_dormant_members:
+        with st.expander("📋 알림 상세 보기", expanded=False):
+            if anniversary_members:
+                st.markdown("**🎾 이번 달 입회 기념일**")
+                for m in anniversary_members:
+                    yr = f"{m['years']}주년" if m['years'] > 0 else "첫해"
+                    st.markdown(f"- {m['name']} ({m['category']}) — 입회일 {m['join_date'][:10]} ({yr})")
+            if long_dormant_members:
+                st.markdown("**⚠️ 장기 휴면 탈퇴 검토 대상**")
+                for m in long_dormant_members:
+                    st.markdown(f"- {m['name']} — 휴면 시작 {m['start']} ({m['days']}일 경과)")
 
 # ─────────────────────────────────────────────────────────
 #  다이얼로그 라우터 — 렌더링 최상단에서 처리
@@ -958,6 +1111,67 @@ with sc2:
     sort_by = st.selectbox("정렬", SORT_OPTIONS,
         key="sort_select",
         label_visibility="collapsed")
+
+# 휴지통 토글 (관리자 인증 시에만 표시)
+if st.session_state.admin_authed:
+    trash_col, _ = st.columns([2, 8])
+    with trash_col:
+        trash_label = "📦 휴지통 닫기" if st.session_state.show_trash else "🗑️ 휴지통 보기"
+        if st.button(trash_label, use_container_width=True, key="toggle_trash"):
+            st.session_state.show_trash = not st.session_state.show_trash
+            st.rerun()
+
+# ── 휴지통 뷰 ─────────────────────────────────────────────
+if st.session_state.show_trash and st.session_state.admin_authed:
+    st.markdown("---")
+    st.markdown("### 🗑️ 휴지통")
+    st.caption(f"삭제 후 {TRASH_DAYS}일이 지난 항목은 자동으로 영구 삭제됩니다.")
+    try:
+        df_all     = load_df(include_deleted=True)
+        df_trash   = df_all[df_all["deleted_at"].astype(str).str.strip() != ""].copy()
+        today_dt   = datetime.now()
+        # 90일 초과 자동 영구 삭제
+        for _, trow in df_trash.iterrows():
+            try:
+                del_dt = datetime.strptime(str(trow["deleted_at"])[:19], "%Y-%m-%d %H:%M:%S")
+                if (today_dt - del_dt).days >= TRASH_DAYS:
+                    hard_delete_row(trow["id"], trow["name"])
+                    st.cache_resource.clear()
+            except Exception:
+                pass
+        # 재로드 후 표시
+        df_all   = load_df(include_deleted=True)
+        df_trash = df_all[df_all["deleted_at"].astype(str).str.strip() != ""].copy()
+    except Exception as e:
+        df_trash = pd.DataFrame()
+        st.warning(f"휴지통 로드 실패: {e}")
+
+    if df_trash.empty:
+        st.info("휴지통이 비어있습니다.")
+    else:
+        for _, trow in df_trash.iterrows():
+            del_dt_str = str(trow.get("deleted_at",""))[:16]
+            try:
+                del_dt   = datetime.strptime(del_dt_str[:19], "%Y-%m-%d %H:%M:%S")
+                days_ago = (today_dt - del_dt).days
+                remain   = TRASH_DAYS - days_ago
+            except Exception:
+                remain = TRASH_DAYS
+            tc1, tc2, tc3, tc4 = st.columns([3, 2, 2, 2])
+            tc1.markdown(f"**{trow['name']}** ({trow['category']})")
+            tc2.caption(f"삭제일: {del_dt_str}")
+            tc3.caption(f"영구삭제까지 {remain}일")
+            with tc4:
+                rcol1, rcol2 = st.columns(2)
+                if rcol1.button("↩️ 복구", key=f"restore_{trow['id']}", use_container_width=True):
+                    restore_row(trow["id"], trow["name"])
+                    st.cache_resource.clear()
+                    st.rerun()
+                if rcol2.button("💀 영구삭제", key=f"hardel_{trow['id']}", use_container_width=True):
+                    hard_delete_row(trow["id"], trow["name"])
+                    st.cache_resource.clear()
+                    st.rerun()
+    st.markdown("---")
 
 # ─────────────────────────────────────────────────────────
 #  필터링 & 정렬
