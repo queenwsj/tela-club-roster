@@ -127,6 +127,8 @@ for k, v in {
     "admin_authed":  False,
     "auth_time":     None,   # 관리자 인증 시각 (타임아웃용)
     "show_trash":    False,  # 휴지통 보기 토글
+    "bulk_mode":     False,  # 벌크 선택 모드
+    "bulk_selected": set(),  # 선택된 회원 ID set
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -515,6 +517,111 @@ def dialog_delete(target):
     if cn.button("취소", use_container_width=True):
         st.session_state.open_dialog   = None
         st.session_state.edit_target   = None
+        st.rerun()
+
+# ─────────────────────────────────────────────────────────
+#  팝업 다이얼로그: 회원 상세 보기 (읽기 전용 — 비밀번호 불필요)
+# ─────────────────────────────────────────────────────────
+@st.dialog("👤 회원 상세 정보", width="large")
+def dialog_detail(row):
+    cat   = str(row.get("category",""))
+    name  = str(row.get("name",""))
+    gender = str(row.get("gender",""))
+    by    = row.get("birth_year","")
+    age   = (date.today().year - int(by)) if by and str(by).isdigit() else None
+
+    # ── 상단 카드 ──
+    gender_color = {"남":"#2563eb","여":"#db2777"}.get(gender,"#374151")
+    st.markdown(f"""
+    <div style='background:linear-gradient(135deg,#1a2e4a,#2563eb);
+         border-radius:14px;padding:20px 24px;margin-bottom:16px;color:#fff;
+         display:flex;align-items:center;gap:16px;'>
+      <div style='font-size:48px;line-height:1'>{"🎾"}</div>
+      <div>
+        <div style='font-size:22px;font-weight:900;margin-bottom:4px'>{name}</div>
+        <div style='font-size:13px;opacity:.85;display:flex;gap:12px;flex-wrap:wrap'>
+          <span>{badge(cat)}</span>
+          <span style='color:{gender_color};font-weight:700'>{gender}</span>
+          {"<span>생년 " + str(int(by)) + "년" + (f" ({age}세)" if age else "") + "</span>" if by else ""}
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── 기본 정보 ──
+    def info_row(label, value, color="#1a2e4a"):
+        if not value or str(value).strip() in ("", "—", "nan"): value = "—"
+        return (f"<div style='display:flex;padding:8px 0;border-bottom:1px solid #f1f5f9;{FS}'>"
+                f"<div style='width:100px;color:#6b7280;font-weight:600;flex-shrink:0'>{label}</div>"
+                f"<div style='color:{color};font-weight:500'>{value}</div></div>")
+
+    st.markdown("**📋 기본 정보**")
+    st.markdown(
+        info_row("카페ID",    row.get("cafe_id","")) +
+        info_row("연락처",    row.get("phone",""),    "#2563eb") +
+        info_row("이메일",    row.get("email",""),    "#2563eb") +
+        info_row("거주지",    row.get("region","")) +
+        info_row("입회일",    row.get("join_date","")) +
+        info_row("입회신청서", row.get("application","")),
+        unsafe_allow_html=True)
+
+    # ── 휴면 기간 타임라인 ──
+    dorm_raw = str(row.get("dormant_period","") or "").strip()
+    if dorm_raw:
+        st.markdown("**💤 휴면 기간 이력**")
+        periods = parse_dormant_periods(dorm_raw)
+        for i, p in enumerate(periods, 1):
+            is_ongoing = not p["end"]
+            status_badge = ("<span style='background:#fef9c3;color:#854d0e;padding:1px 8px;"
+                            "border-radius:20px;font-size:11px;font-weight:700'>🟡 진행중</span>"
+                            if is_ongoing else
+                            "<span style='background:#dcfce7;color:#166534;padding:1px 8px;"
+                            "border-radius:20px;font-size:11px;font-weight:700'>✅ 종료</span>")
+            end_disp = p["end"] if p["end"] else "현재"
+            # 기간(일수) 계산
+            try:
+                sd = datetime.strptime(p["start"], "%Y-%m-%d").date()
+                ed = date.today() if is_ongoing else datetime.strptime(p["end"], "%Y-%m-%d").date()
+                days = (ed - sd).days
+                duration = f"({days}일)"
+            except Exception:
+                duration = ""
+            st.markdown(
+                f"<div style='display:flex;align-items:center;gap:10px;padding:7px 12px;"
+                f"background:#fef9c3;border-radius:8px;margin-bottom:4px;{FS}'>"
+                f"<span style='color:#854d0e;font-weight:700'>#{i}</span>"
+                f"<span>{p['start']} ~ {end_disp}</span>"
+                f"<span style='color:#9ca3af'>{duration}</span>"
+                f"{status_badge}</div>",
+                unsafe_allow_html=True)
+
+    # ── 탈퇴일 ──
+    leave = str(row.get("leave_date","") or "").strip()
+    if leave:
+        st.markdown(
+            f"<div style='background:#fee2e2;border-left:4px solid #ef4444;"
+            f"padding:8px 14px;border-radius:6px;{FS};color:#7f1d1d;margin-top:8px'>"
+            f"🚪 탈퇴일: <b>{leave}</b></div>", unsafe_allow_html=True)
+
+    # ── 메모 ──
+    memo = str(row.get("memo","") or "").strip()
+    if memo:
+        st.markdown("**📝 메모**")
+        st.markdown(
+            f"<div style='background:#f8fafc;border-left:3px solid #94a3b8;"
+            f"padding:10px 14px;border-radius:6px;{FS};color:#374151;white-space:pre-wrap'>"
+            f"{memo}</div>", unsafe_allow_html=True)
+
+    # ── 업데이트 시각 ──
+    upd = str(row.get("updated_at","") or "").strip()
+    if upd:
+        st.markdown(f"<div style='{FS};color:#9ca3af;text-align:right;margin-top:12px'>최근 수정: {upd}</div>",
+                    unsafe_allow_html=True)
+
+    st.divider()
+    if st.button("✕ 닫기", use_container_width=True):
+        st.session_state.open_dialog = None
+        st.session_state.edit_target = None
         st.rerun()
 
 # ─────────────────────────────────────────────────────────
@@ -928,7 +1035,7 @@ def dialog_form(existing=None):
 st.markdown("""
 <div class="app-header">
   <span style="font-size:36px">🎾</span>
-  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.06)</span></h1>
+  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.07)</span></h1>
   <p>TELA CLUB Member Roster · Google Sheets 연동</p></div>
 </div>""", unsafe_allow_html=True)
 
@@ -1003,6 +1110,16 @@ if od is not None:
 
 if od == "add":
     dialog_form(existing=None)
+
+elif od == "detail" and et:
+    # 읽기 전용 상세 보기 — 비밀번호 불필요
+    detail_row = None
+    if not df.empty:
+        rows = df[df["id"] == et["id"]]
+        if not rows.empty:
+            detail_row = rows.iloc[0].to_dict()
+    if detail_row:
+        dialog_detail(detail_row)
 
 elif od == "edit" and et and st.session_state.admin_authed:
     existing_row = None
@@ -1245,75 +1362,172 @@ view_df = apply_filters(df.copy())
 st.caption(f"검색 결과 **{len(view_df)}명** / 전체 {len(df)}명")
 
 # ─────────────────────────────────────────────────────────
+#  벌크 모드 툴바
+# ─────────────────────────────────────────────────────────
+bulk_bar_col1, bulk_bar_col2 = st.columns([1, 5])
+with bulk_bar_col1:
+    bulk_label = "☑️ 선택 모드 끄기" if st.session_state.bulk_mode else "☑️ 선택 모드"
+    if st.button(bulk_label, use_container_width=True, key="toggle_bulk"):
+        st.session_state.bulk_mode     = not st.session_state.bulk_mode
+        st.session_state.bulk_selected = set()
+        st.rerun()
+
+if st.session_state.bulk_mode and st.session_state.bulk_selected:
+    sel_ids   = st.session_state.bulk_selected
+    sel_names = [str(r["name"]) for _, r in view_df[view_df["id"].isin(sel_ids)].iterrows()]
+    sel_count = len(sel_ids)
+
+    st.markdown(
+        f"<div style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;"
+        f"padding:10px 16px;margin-bottom:8px;font-size:13px;color:#1e40af;font-weight:600'>"
+        f"☑️ {sel_count}명 선택됨: {', '.join(sel_names[:5])}"
+        f"{'…' if len(sel_names)>5 else ''}</div>",
+        unsafe_allow_html=True)
+
+    ba1, ba2, ba3, ba4, ba5 = st.columns([1.5, 1.5, 1.5, 1.5, 1.5])
+
+    # 일괄 카테고리 변경
+    with ba1:
+        new_cat = st.selectbox("카테고리 변경", ["—"] + CATEGORIES,
+                               key="bulk_cat_sel", label_visibility="collapsed")
+    with ba2:
+        if st.button("✅ 적용", key="bulk_cat_apply", use_container_width=True):
+            if new_cat != "—" and st.session_state.admin_authed:
+                with st.spinner(f"{sel_count}명 카테고리 변경 중…"):
+                    for _, r in view_df[view_df["id"].isin(sel_ids)].iterrows():
+                        row_d = r.to_dict()
+                        row_d["category"] = new_cat
+                        save_row(df, row_d, is_new=False,
+                                 action_detail=f"벌크 카테고리 변경 → {new_cat}")
+                st.session_state.bulk_selected = set()
+                st.session_state.bulk_mode     = False
+                st.cache_resource.clear()
+                st.rerun()
+            elif not st.session_state.admin_authed:
+                st.warning("관리자 인증이 필요합니다.")
+
+    # 전화번호 추출 (클립보드용)
+    with ba3:
+        phones = [str(r["phone"]) for _, r in view_df[view_df["id"].isin(sel_ids)].iterrows()
+                  if str(r.get("phone","")).strip()]
+        phone_text = "\n".join(phones)
+        st.download_button("📋 연락처 추출", data=phone_text.encode("utf-8"),
+                           file_name="selected_phones.txt", mime="text/plain",
+                           use_container_width=True, key="bulk_phone_dl")
+
+    # 전체 선택 / 해제
+    with ba4:
+        if st.button("전체 선택", key="bulk_all", use_container_width=True):
+            st.session_state.bulk_selected = set(view_df["id"].tolist())
+            st.rerun()
+    with ba5:
+        if st.button("선택 해제", key="bulk_none", use_container_width=True):
+            st.session_state.bulk_selected = set()
+            st.rerun()
+
+# ─────────────────────────────────────────────────────────
 #  회원 목록 테이블
 # ─────────────────────────────────────────────────────────
-CW  = [0.28, 0.65, 0.82, 0.85, 0.46, 0.38, 0.95, 0.72, 0.75, 1.0, 0.72, 0.68, 1.1, 0.6]
-HDR = ["No.","구분","성명","카페ID","생년","성별","연락처","거주지","입회일","휴면기간","탈퇴일","입회신청서","메모","관리"]
+# 벌크 모드: 체크박스 컬럼 추가
+if st.session_state.bulk_mode:
+    CW  = [0.22, 0.28, 0.65, 0.82, 0.85, 0.46, 0.38, 0.95, 0.72, 0.75, 1.0, 0.72, 0.68, 1.1, 0.85]
+    HDR = ["☑","No.","구분","성명","카페ID","생년","성별","연락처","거주지","입회일","휴면기간","탈퇴일","입회신청서","메모","관리"]
+else:
+    CW  = [0.28, 0.65, 0.82, 0.85, 0.46, 0.38, 0.95, 0.72, 0.75, 1.0, 0.72, 0.68, 1.1, 0.85]
+    HDR = ["No.","구분","성명","카페ID","생년","성별","연락처","거주지","입회일","휴면기간","탈퇴일","입회신청서","메모","관리"]
 
 if view_df.empty:
     st.info("🎾 해당 조건의 회원이 없습니다.")
 else:
     hcols = st.columns(CW)
-    for hc,txt in zip(hcols,HDR):
+    for hc, txt in zip(hcols, HDR):
         hc.markdown(f"<div style='{FS};font-weight:700;color:#6b7280;"
                     f"padding:6px 0 4px;border-bottom:2px solid #e2e8f0'>{txt}</div>",
                     unsafe_allow_html=True)
 
     for idx, row in view_df.iterrows():
         rc = st.columns(CW)
+        col_offset = 0
+
+        # ── 벌크 체크박스 ──
+        if st.session_state.bulk_mode:
+            with rc[0]:
+                checked = int(row["id"]) in st.session_state.bulk_selected
+                if st.checkbox("", value=checked, key=f"chk_{row['id']}", label_visibility="collapsed"):
+                    st.session_state.bulk_selected.add(int(row["id"]))
+                else:
+                    st.session_state.bulk_selected.discard(int(row["id"]))
+            col_offset = 1
+
         memo_txt  = str(row.get("memo","") or "").strip()
         memo_disp = (memo_txt[:20]+"…") if len(memo_txt)>20 else (memo_txt or "—")
         by_val    = int(row["birth_year"]) if pd.notna(row.get("birth_year")) and row.get("birth_year") else "—"
         app_val   = str(row.get("application","") or "—")
         app_color = {"Yes":"#16a34a","No":"#dc2626"}.get(app_val,"#9ca3af")
 
-        rc[0].markdown(cell(idx+1,"#9ca3af"), unsafe_allow_html=True)
-        rc[1].markdown(f"<div style='padding:5px 0'>{badge(row.get('category',''))}</div>", unsafe_allow_html=True)
-        rc[2].markdown(cell(row.get('name',''),"#1a2e4a","font-weight:600"), unsafe_allow_html=True)
-        rc[3].markdown(cell(row.get('cafe_id','') or '—',"#6b7280"), unsafe_allow_html=True)
-        rc[4].markdown(cell(by_val), unsafe_allow_html=True)
-        rc[5].markdown(f"<div style='padding:5px 0'>{gender_html(str(row.get('gender','')))}</div>", unsafe_allow_html=True)
-        rc[6].markdown(cell(row.get('phone','') or '—'), unsafe_allow_html=True)
-        rc[7].markdown(cell(row.get('region','') or '—',"#374151"), unsafe_allow_html=True)
-        rc[8].markdown(cell(row.get('join_date','') or '—',"#6b7280"), unsafe_allow_html=True)
-        # 휴면 기간 요약 표시
-        # - 1건 종료: 시작~끝 그대로
-        # - 진행중: 최신 진행중 기간의 시작일 표시 (사용자 요청)
-        # - 여러 건 모두 종료: N건 종료
+        rc[col_offset+0].markdown(cell(idx+1,"#9ca3af"), unsafe_allow_html=True)
+        rc[col_offset+1].markdown(f"<div style='padding:5px 0'>{badge(row.get('category',''))}</div>", unsafe_allow_html=True)
+        rc[col_offset+2].markdown(cell(row.get('name',''),"#1a2e4a","font-weight:600"), unsafe_allow_html=True)
+        rc[col_offset+3].markdown(cell(row.get('cafe_id','') or '—',"#6b7280"), unsafe_allow_html=True)
+        rc[col_offset+4].markdown(cell(by_val), unsafe_allow_html=True)
+        rc[col_offset+5].markdown(f"<div style='padding:5px 0'>{gender_html(str(row.get('gender','')))}</div>", unsafe_allow_html=True)
+        rc[col_offset+6].markdown(cell(row.get('phone','') or '—'), unsafe_allow_html=True)
+        rc[col_offset+7].markdown(cell(row.get('region','') or '—',"#374151"), unsafe_allow_html=True)
+        rc[col_offset+8].markdown(cell(row.get('join_date','') or '—',"#6b7280"), unsafe_allow_html=True)
+
+        # 휴면 기간 요약
         dorm_raw = str(row.get('dormant_period','') or '').strip()
         if dorm_raw:
-            dorm_list_disp = parse_dormant_periods(dorm_raw)
-            dorm_cnt  = len(dorm_list_disp)
+            dorm_list_disp  = parse_dormant_periods(dorm_raw)
+            dorm_cnt        = len(dorm_list_disp)
             ongoing_periods = [p for p in dorm_list_disp if not p["end"]]
             if ongoing_periods:
-                # 진행중인 기간이 있으면 그 시작일 표시 (최신 = 마지막)
-                latest_ongoing = ongoing_periods[-1]
-                dorm_disp = f"{latest_ongoing['start']}~"
+                dorm_disp = f"{ongoing_periods[-1]['start']}~"
             elif dorm_cnt == 1:
-                # 단일 종료된 기간
                 dorm_disp = f"{dorm_list_disp[0]['start']}~{dorm_list_disp[0]['end']}"
             else:
-                # 여러 건 모두 종료
                 last = dorm_list_disp[-1]
                 dorm_disp = f"{last['start']}~{last['end']} 외 {dorm_cnt-1}건"
         else:
             dorm_disp = "—"
-        rc[9].markdown(f"<div style='padding:7px 0;{FS};color:#ca8a04' title='{dorm_raw}'>{dorm_disp}</div>", unsafe_allow_html=True)
-        rc[10].markdown(cell(row.get('leave_date','') or '—',"#dc2626"), unsafe_allow_html=True)
-        rc[11].markdown(f"<div style='padding:5px 0'><span style='{FS};font-weight:700;color:{app_color}'>{app_val}</span></div>", unsafe_allow_html=True)
-        rc[12].markdown(f"<div style='padding:7px 0;{FS};color:#4b5563' title='{memo_txt}'>{memo_disp}</div>", unsafe_allow_html=True)
+        rc[col_offset+9].markdown(
+            f"<div style='padding:7px 0;{FS};color:#ca8a04' title='{dorm_raw}'>{dorm_disp}</div>",
+            unsafe_allow_html=True)
 
-        with rc[13]:
-            st.markdown("<div class='edit-col'>", unsafe_allow_html=True)
-            if st.button("✏️ 수정", key=f"edit_{row['id']}", use_container_width=True):
-                target = {"type":"edit","id":int(row["id"]),"name":row["name"]}
-                st.session_state.edit_target = target
-                # 이미 세션 인증된 경우 비번 건너뛰고 바로 수정 화면으로
-                if st.session_state.admin_authed:
-                    st.session_state.open_dialog = "edit"
-                else:
-                    st.session_state.open_dialog = "pw_edit"
-                st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
+        rc[col_offset+10].markdown(cell(row.get('leave_date','') or '—',"#dc2626"), unsafe_allow_html=True)
+        rc[col_offset+11].markdown(
+            f"<div style='padding:5px 0'><span style='{FS};font-weight:700;color:{app_color}'>{app_val}</span></div>",
+            unsafe_allow_html=True)
+        rc[col_offset+12].markdown(
+            f"<div style='padding:7px 0;{FS};color:#4b5563' title='{memo_txt}'>{memo_disp}</div>",
+            unsafe_allow_html=True)
+
+        # ── 관리 버튼: 👁️ 상세 보기 + ✏️ 수정 ──
+        with rc[col_offset+13]:
+            st.markdown("""
+            <style>
+            .st-key-detail_btn_wrap button {
+                background:#f0f9ff !important; color:#0369a1 !important;
+                border:1px solid #bae6fd !important; font-size:11px !important;
+            }
+            .st-key-detail_btn_wrap button:hover { background:#e0f2fe !important; }
+            </style>""", unsafe_allow_html=True)
+            btn_c1, btn_c2 = st.columns([1, 1])
+            with btn_c1:
+                if st.button("👁️", key=f"detail_{row['id']}", use_container_width=True,
+                             help="상세 보기 (비밀번호 불필요)"):
+                    st.session_state.open_dialog = "detail"
+                    st.session_state.edit_target = {"id": int(row["id"]), "name": row["name"], "type": "detail"}
+                    st.rerun()
+            with btn_c2:
+                if st.button("✏️", key=f"edit_{row['id']}", use_container_width=True,
+                             help="수정 (관리자 인증 필요)"):
+                    target = {"type":"edit","id":int(row["id"]),"name":row["name"]}
+                    st.session_state.edit_target = target
+                    if st.session_state.admin_authed:
+                        st.session_state.open_dialog = "edit"
+                    else:
+                        st.session_state.open_dialog = "pw_edit"
+                    st.rerun()
 
         st.markdown("<div style='border-bottom:1px solid #f1f5f9'></div>", unsafe_allow_html=True)
