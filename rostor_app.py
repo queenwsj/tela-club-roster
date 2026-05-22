@@ -791,7 +791,7 @@ def dialog_form(existing=None):
 st.markdown("""
 <div class="app-header">
   <span style="font-size:36px">🎾</span>
-  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.04)</span></h1>
+  <div><h1>테라클럽 회원 명부 <span style="font-size:13px;font-weight:400;opacity:.65;">(v1.05)</span></h1>
   <p>TELA CLUB Member Roster · Google Sheets 연동</p></div>
 </div>""", unsafe_allow_html=True)
 
@@ -923,18 +923,52 @@ filter_cat = st.radio("필터", FILTER_OPTIONS,
     index=FILTER_OPTIONS.index(st.session_state.filter_cat),
     horizontal=True, label_visibility="collapsed",
     key="filter_radio")
-st.session_state.filter_cat = filter_cat
+
+# ── 카테고리 변경 감지: 필터가 바뀌면 정렬 위젯도 자동 초기화 ──
+# 사용자 의도에 따라:
+#  - 정회원: 입회일순 (오래된 회원이 위)
+#  - 휴면: 최근 휴면일순 (최근 휴면 시작이 위)
+#  - 탈퇴: 최근 탈퇴일순 (최근 탈퇴가 위)
+#  - 전체/운영진: 구분순 (기존 기본값)
+SORT_DEFAULT_BY_FILTER = {
+    "전체":   "구분순",
+    "운영진": "구분순",
+    "정회원": "입회일순(빠른)",
+    "휴면":   "휴면 시작일순(최근)",
+    "탈퇴":   "탈퇴일순(최근)",
+}
+# 필터가 바뀌면 sort_select의 세션값을 해당 기본값으로 교체
+if st.session_state.filter_cat != filter_cat:
+    st.session_state["sort_select"] = SORT_DEFAULT_BY_FILTER[filter_cat]
+    st.session_state.filter_cat = filter_cat
+
+SORT_OPTIONS = [
+    "No.순", "구분순", "이름순",
+    "입회일순(빠른)", "입회일순(최근)",
+    "휴면 시작일순(최근)",
+    "탈퇴일순(최근)",
+    "생년순", "성별순"
+]
+# 세션에 sort_select가 없거나 옵션에 없으면 현재 필터의 기본값으로
+if "sort_select" not in st.session_state or st.session_state.get("sort_select") not in SORT_OPTIONS:
+    st.session_state["sort_select"] = SORT_DEFAULT_BY_FILTER.get(filter_cat, "구분순")
 
 sc2,_ = st.columns([1,5])
 with sc2:
-    sort_by = st.selectbox("정렬",
-        ["No.순","구분순","이름순","입회일순","탈퇴일순","생년순","성별순"],
-        index=1,
+    sort_by = st.selectbox("정렬", SORT_OPTIONS,
+        key="sort_select",
         label_visibility="collapsed")
 
 # ─────────────────────────────────────────────────────────
 #  필터링 & 정렬
 # ─────────────────────────────────────────────────────────
+def _latest_dormant_start(s):
+    """휴면 기간 문자열에서 가장 최근의 시작일을 반환 (정렬용)"""
+    periods = parse_dormant_periods(s) if s else []
+    if not periods: return ""
+    # 시작일 기준 최대값 반환
+    return max((p["start"] for p in periods if p.get("start")), default="")
+
 def apply_filters(data):
     if data.empty: return data
     if filter_cat == "운영진":
@@ -951,13 +985,30 @@ def apply_filters(data):
                 data["cafe_id"].astype(str).str.lower().str.contains(q,na=False) |
                 data["phone"].astype(str).str.contains(q,na=False))
         data = data[mask]
-    if   sort_by=="구분순":   data=data.copy(); data["_o"]=data["category"].map(CAT_ORDER).fillna(99); data=data.sort_values("_o").drop(columns="_o")
-    elif sort_by=="이름순":   data=data.sort_values("name")
-    elif sort_by=="입회일순": data=data.sort_values("join_date")
-    elif sort_by=="탈퇴일순": data=data.sort_values("leave_date")
-    elif sort_by=="생년순":   data=data.sort_values("birth_year")
-    elif sort_by=="성별순":   data=data.sort_values("gender")
-    else:                     data=data.sort_values("id")
+
+    if sort_by == "구분순":
+        data = data.copy()
+        data["_o"] = data["category"].map(CAT_ORDER).fillna(99)
+        data = data.sort_values("_o").drop(columns="_o")
+    elif sort_by == "이름순":
+        data = data.sort_values("name")
+    elif sort_by == "입회일순(빠른)":
+        # 오래된 입회일이 위 (오름차순). 빈 값은 맨 뒤로.
+        data = data.sort_values("join_date", ascending=True, na_position="last")
+    elif sort_by == "입회일순(최근)":
+        data = data.sort_values("join_date", ascending=False, na_position="last")
+    elif sort_by == "휴면 시작일순(최근)":
+        data = data.copy()
+        data["_dorm_latest"] = data["dormant_period"].apply(_latest_dormant_start)
+        data = data.sort_values("_dorm_latest", ascending=False, na_position="last").drop(columns="_dorm_latest")
+    elif sort_by == "탈퇴일순(최근)":
+        data = data.sort_values("leave_date", ascending=False, na_position="last")
+    elif sort_by == "생년순":
+        data = data.sort_values("birth_year")
+    elif sort_by == "성별순":
+        data = data.sort_values("gender")
+    else:  # No.순
+        data = data.sort_values("id")
     return data.reset_index(drop=True)
 
 view_df = apply_filters(df.copy())
