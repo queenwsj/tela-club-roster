@@ -1374,14 +1374,15 @@ with bulk_bar_col1:
 
 if st.session_state.bulk_mode and st.session_state.bulk_selected:
     sel_ids   = st.session_state.bulk_selected
-    sel_names = [str(r["name"]) for _, r in view_df[view_df["id"].isin(sel_ids)].iterrows()]
-    sel_count = len(sel_ids)
+    # 전체 df 기준으로 이름 조회 (view_df에 없는 경우 대비)
+    sel_names = [str(r["name"]) for _, r in df[df["id"].isin(sel_ids)].iterrows()]
+    sel_count = len(sel_ids)   # bulk_selected set 기준 (정확한 카운트)
 
     st.markdown(
         f"<div style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;"
         f"padding:10px 16px;margin-bottom:8px;font-size:13px;color:#1e40af;font-weight:600'>"
-        f"☑️ {sel_count}명 선택됨: {', '.join(sel_names[:5])}"
-        f"{'…' if len(sel_names)>5 else ''}</div>",
+        f"☑️ {sel_count}명 선택됨: {', '.join(sel_names[:7])}"
+        f"{'…' if len(sel_names)>7 else ''}</div>",
         unsafe_allow_html=True)
 
     ba1, ba2, ba3, ba4, ba5 = st.columns([1.5, 1.5, 1.5, 1.5, 1.5])
@@ -1406,14 +1407,26 @@ if st.session_state.bulk_mode and st.session_state.bulk_selected:
             elif not st.session_state.admin_authed:
                 st.warning("관리자 인증이 필요합니다.")
 
-    # 전화번호 추출 (클립보드용)
+    # 연락처 추출 (구분 / 성명 / 연락처 포함)
     with ba3:
-        phones = [str(r["phone"]) for _, r in view_df[view_df["id"].isin(sel_ids)].iterrows()
-                  if str(r.get("phone","")).strip()]
-        phone_text = "\n".join(phones)
-        st.download_button("📋 연락처 추출", data=phone_text.encode("utf-8"),
-                           file_name="selected_phones.txt", mime="text/plain",
-                           use_container_width=True, key="bulk_phone_dl")
+        # view_df가 아닌 전체 df 기준으로 선택된 ID 조회 (필터 밖 선택 포함)
+        sel_rows = df[df["id"].isin(sel_ids)].copy()
+        lines = ["구분\t성명\t연락처"]  # 헤더
+        for _, r in sel_rows.iterrows():
+            cat_v   = str(r.get("category","") or "").strip()
+            name_v  = str(r.get("name","") or "").strip()
+            phone_v = str(r.get("phone","") or "").strip()
+            lines.append(f"{cat_v}\t{name_v}\t{phone_v}")
+        phone_text = "\n".join(lines)
+        today_str  = date.today().strftime("%Y%m%d")
+        st.download_button(
+            "📋 연락처 추출",
+            data=phone_text.encode("utf-8-sig"),  # BOM 포함 → 엑셀 한글 깨짐 방지
+            file_name=f"contacts_{today_str}.txt",
+            mime="text/plain",
+            use_container_width=True,
+            key="bulk_phone_dl"
+        )
 
     # 전체 선택 / 해제
     with ba4:
@@ -1449,14 +1462,25 @@ else:
         rc = st.columns(CW)
         col_offset = 0
 
-        # ── 벌크 체크박스 ──
+        # ── 벌크 체크박스 (콜백 방식 — value= 파라미터 없이 세션이 위젯 상태를 직접 관리) ──
         if st.session_state.bulk_mode:
-            with rc[0]:
-                checked = int(row["id"]) in st.session_state.bulk_selected
-                if st.checkbox("", value=checked, key=f"chk_{row['id']}", label_visibility="collapsed"):
-                    st.session_state.bulk_selected.add(int(row["id"]))
+            row_id = int(row["id"])
+            chk_key = f"chk_{row_id}"
+
+            def _toggle_chk(rid=row_id, k=chk_key):
+                if st.session_state.get(k, False):
+                    st.session_state.bulk_selected.add(rid)
                 else:
-                    st.session_state.bulk_selected.discard(int(row["id"]))
+                    st.session_state.bulk_selected.discard(rid)
+
+            # 세션에 키가 없을 때만 초기값 설정 (이후엔 위젯 자체가 상태 보유)
+            if chk_key not in st.session_state:
+                st.session_state[chk_key] = row_id in st.session_state.bulk_selected
+
+            with rc[0]:
+                st.checkbox("", key=chk_key,
+                            label_visibility="collapsed",
+                            on_change=_toggle_chk)
             col_offset = 1
 
         memo_txt  = str(row.get("memo","") or "").strip()
@@ -1502,25 +1526,34 @@ else:
             f"<div style='padding:7px 0;{FS};color:#4b5563' title='{memo_txt}'>{memo_disp}</div>",
             unsafe_allow_html=True)
 
-        # ── 관리 버튼: 👁️ 상세 보기 + ✏️ 수정 ──
+        # ── 관리 버튼: 열람 / 수정 ──
         with rc[col_offset+13]:
-            st.markdown("""
+            st.markdown(f"""
             <style>
-            .st-key-detail_btn_wrap button {
+            .st-key-detail_{row['id']} button {{
                 background:#f0f9ff !important; color:#0369a1 !important;
-                border:1px solid #bae6fd !important; font-size:11px !important;
-            }
-            .st-key-detail_btn_wrap button:hover { background:#e0f2fe !important; }
+                border:1px solid #bae6fd !important;
+                font-size:11px !important; font-weight:700 !important;
+                padding:2px 4px !important; height:28px !important;
+            }}
+            .st-key-detail_{row['id']} button:hover {{ background:#dbeafe !important; }}
+            .st-key-edit_{row['id']} button {{
+                background:#f0fdf4 !important; color:#15803d !important;
+                border:1px solid #bbf7d0 !important;
+                font-size:11px !important; font-weight:700 !important;
+                padding:2px 4px !important; height:28px !important;
+            }}
+            .st-key-edit_{row['id']} button:hover {{ background:#dcfce7 !important; }}
             </style>""", unsafe_allow_html=True)
             btn_c1, btn_c2 = st.columns([1, 1])
             with btn_c1:
-                if st.button("👁️", key=f"detail_{row['id']}", use_container_width=True,
+                if st.button("열람", key=f"detail_{row['id']}", use_container_width=True,
                              help="상세 보기 (비밀번호 불필요)"):
                     st.session_state.open_dialog = "detail"
                     st.session_state.edit_target = {"id": int(row["id"]), "name": row["name"], "type": "detail"}
                     st.rerun()
             with btn_c2:
-                if st.button("✏️", key=f"edit_{row['id']}", use_container_width=True,
+                if st.button("수정", key=f"edit_{row['id']}", use_container_width=True,
                              help="수정 (관리자 인증 필요)"):
                     target = {"type":"edit","id":int(row["id"]),"name":row["name"]}
                     st.session_state.edit_target = target
