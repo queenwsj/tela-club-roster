@@ -127,8 +127,8 @@ for k, v in {
     "admin_authed":  False,
     "auth_time":     None,   # 관리자 인증 시각 (타임아웃용)
     "show_trash":    False,  # 휴지통 보기 토글
-    "bulk_mode":     False,  # 벌크 선택 모드
     "bulk_selected": set(),  # 선택된 회원 ID set
+    "bulk_all_flag":  False,  # 헤더 체크박스 전체선택 플래그
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -1362,22 +1362,13 @@ view_df = apply_filters(df.copy())
 st.caption(f"검색 결과 **{len(view_df)}명** / 전체 {len(df)}명")
 
 # ─────────────────────────────────────────────────────────
-#  벌크 모드 툴바
+#  선택 액션 툴바 (선택된 회원이 있을 때만 표시)
 # ─────────────────────────────────────────────────────────
-bulk_bar_col1, bulk_bar_col2 = st.columns([1, 5])
-with bulk_bar_col1:
-    bulk_label = "☑️ 선택 모드 끄기" if st.session_state.bulk_mode else "☑️ 선택 모드"
-    if st.button(bulk_label, use_container_width=True, key="toggle_bulk"):
-        st.session_state.bulk_mode     = not st.session_state.bulk_mode
-        st.session_state.bulk_selected = set()
-        st.rerun()
+sel_ids   = st.session_state.bulk_selected
+sel_count = len(sel_ids)
 
-if st.session_state.bulk_mode and st.session_state.bulk_selected:
-    sel_ids   = st.session_state.bulk_selected
-    # 전체 df 기준으로 이름 조회 (view_df에 없는 경우 대비)
+if sel_count > 0:
     sel_names = [str(r["name"]) for _, r in df[df["id"].isin(sel_ids)].iterrows()]
-    sel_count = len(sel_ids)   # bulk_selected set 기준 (정확한 카운트)
-
     st.markdown(
         f"<div style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;"
         f"padding:10px 16px;margin-bottom:8px;font-size:13px;color:#1e40af;font-weight:600'>"
@@ -1385,75 +1376,102 @@ if st.session_state.bulk_mode and st.session_state.bulk_selected:
         f"{'…' if len(sel_names)>7 else ''}</div>",
         unsafe_allow_html=True)
 
-    ba1, ba2, ba3, ba4, ba5 = st.columns([1.5, 1.5, 1.5, 1.5, 1.5])
+    ba1, ba2, ba3 = st.columns([2, 1.5, 1.5])
 
     # 일괄 카테고리 변경
     with ba1:
-        new_cat = st.selectbox("카테고리 변경", ["—"] + CATEGORIES,
-                               key="bulk_cat_sel", label_visibility="collapsed")
-    with ba2:
-        if st.button("✅ 적용", key="bulk_cat_apply", use_container_width=True):
-            if new_cat != "—" and st.session_state.admin_authed:
-                with st.spinner(f"{sel_count}명 카테고리 변경 중…"):
-                    for _, r in view_df[view_df["id"].isin(sel_ids)].iterrows():
-                        row_d = r.to_dict()
-                        row_d["category"] = new_cat
-                        save_row(df, row_d, is_new=False,
-                                 action_detail=f"벌크 카테고리 변경 → {new_cat}")
-                st.session_state.bulk_selected = set()
-                st.session_state.bulk_mode     = False
-                st.cache_resource.clear()
-                st.rerun()
-            elif not st.session_state.admin_authed:
-                st.warning("관리자 인증이 필요합니다.")
+        bac1, bac2 = st.columns([2, 1])
+        with bac1:
+            new_cat = st.selectbox("카테고리 변경", ["—"] + CATEGORIES,
+                                   key="bulk_cat_sel", label_visibility="collapsed")
+        with bac2:
+            if st.button("✅ 적용", key="bulk_cat_apply", use_container_width=True):
+                if new_cat != "—" and st.session_state.admin_authed:
+                    with st.spinner(f"{sel_count}명 카테고리 변경 중…"):
+                        for _, r in df[df["id"].isin(sel_ids)].iterrows():
+                            row_d = r.to_dict()
+                            row_d["category"] = new_cat
+                            save_row(df, row_d, is_new=False,
+                                     action_detail=f"벌크 카테고리 변경 → {new_cat}")
+                    # 체크박스 세션 초기화
+                    for sid in list(sel_ids):
+                        k = f"chk_{sid}"
+                        if k in st.session_state:
+                            del st.session_state[k]
+                    st.session_state.bulk_selected = set()
+                    st.cache_resource.clear()
+                    st.rerun()
+                elif not st.session_state.admin_authed:
+                    st.warning("관리자 인증이 필요합니다.")
 
-    # 연락처 추출 (구분 / 성명 / 연락처 포함)
-    with ba3:
-        # view_df가 아닌 전체 df 기준으로 선택된 ID 조회 (필터 밖 선택 포함)
-        sel_rows = df[df["id"].isin(sel_ids)].copy()
-        lines = ["구분\t성명\t연락처"]  # 헤더
+    # 연락처 추출
+    with ba2:
+        sel_rows   = df[df["id"].isin(sel_ids)].copy()
+        lines      = ["구분\t성명\t연락처"]
         for _, r in sel_rows.iterrows():
-            cat_v   = str(r.get("category","") or "").strip()
-            name_v  = str(r.get("name","") or "").strip()
-            phone_v = str(r.get("phone","") or "").strip()
-            lines.append(f"{cat_v}\t{name_v}\t{phone_v}")
+            lines.append(f"{str(r.get('category','') or '').strip()}\t"
+                         f"{str(r.get('name','') or '').strip()}\t"
+                         f"{str(r.get('phone','') or '').strip()}")
         phone_text = "\n".join(lines)
         today_str  = date.today().strftime("%Y%m%d")
         st.download_button(
             "📋 연락처 추출",
-            data=phone_text.encode("utf-8-sig"),  # BOM 포함 → 엑셀 한글 깨짐 방지
+            data=phone_text.encode("utf-8-sig"),
             file_name=f"contacts_{today_str}.txt",
             mime="text/plain",
             use_container_width=True,
             key="bulk_phone_dl"
         )
 
-    # 전체 선택 / 해제
-    with ba4:
-        if st.button("전체 선택", key="bulk_all", use_container_width=True):
-            st.session_state.bulk_selected = set(view_df["id"].tolist())
-            st.rerun()
-    with ba5:
-        if st.button("선택 해제", key="bulk_none", use_container_width=True):
-            st.session_state.bulk_selected = set()
+    # 선택 해제
+    with ba3:
+        if st.button("✕ 선택 해제", key="bulk_none", use_container_width=True):
+            for sid in list(sel_ids):
+                k = f"chk_{sid}"
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.session_state.bulk_selected  = set()
+            st.session_state.bulk_all_flag  = False
+            if "hdr_chk_all" in st.session_state:
+                del st.session_state["hdr_chk_all"]
             st.rerun()
 
 # ─────────────────────────────────────────────────────────
-#  회원 목록 테이블
+#  회원 목록 테이블 (체크박스 항상 표시)
 # ─────────────────────────────────────────────────────────
-# 벌크 모드: 체크박스 컬럼 추가
-if st.session_state.bulk_mode:
-    CW  = [0.22, 0.28, 0.65, 0.82, 0.85, 0.46, 0.38, 0.95, 0.72, 0.75, 1.0, 0.72, 0.68, 1.1, 0.85]
-    HDR = ["☑","No.","구분","성명","카페ID","생년","성별","연락처","거주지","입회일","휴면기간","탈퇴일","입회신청서","메모","관리"]
-else:
-    CW  = [0.28, 0.65, 0.82, 0.85, 0.46, 0.38, 0.95, 0.72, 0.75, 1.0, 0.72, 0.68, 1.1, 0.85]
-    HDR = ["No.","구분","성명","카페ID","생년","성별","연락처","거주지","입회일","휴면기간","탈퇴일","입회신청서","메모","관리"]
+CW  = [0.22, 0.28, 0.65, 0.82, 0.85, 0.46, 0.38, 0.95, 0.72, 0.75, 1.0, 0.72, 0.68, 1.1, 0.85]
+HDR = ["☑","No.","구분","성명","카페ID","생년","성별","연락처","거주지","입회일","휴면기간","탈퇴일","입회신청서","메모","관리"]
 
 if view_df.empty:
     st.info("🎾 해당 조건의 회원이 없습니다.")
 else:
     hcols = st.columns(CW)
-    for hc, txt in zip(hcols, HDR):
+    # ── 헤더 첫 번째 열: 전체 선택/해제 체크박스 ──
+    all_ids_in_view = set(view_df["id"].tolist())
+    all_selected    = bool(all_ids_in_view) and all_ids_in_view.issubset(st.session_state.bulk_selected)
+
+    def _toggle_all():
+        if st.session_state.get("hdr_chk_all", False):
+            # 전체 선택: 현재 뷰의 모든 ID 추가
+            st.session_state.bulk_selected.update(all_ids_in_view)
+            for rid in all_ids_in_view:
+                st.session_state[f"chk_{rid}"] = True
+        else:
+            # 전체 해제: 현재 뷰의 모든 ID 제거
+            st.session_state.bulk_selected -= all_ids_in_view
+            for rid in all_ids_in_view:
+                st.session_state[f"chk_{rid}"] = False
+
+    if "hdr_chk_all" not in st.session_state:
+        st.session_state["hdr_chk_all"] = all_selected
+
+    with hcols[0]:
+        st.checkbox("", key="hdr_chk_all",
+                    label_visibility="collapsed",
+                    on_change=_toggle_all,
+                    help="전체 선택 / 해제")
+
+    for hc, txt in zip(hcols[1:], HDR[1:]):
         hc.markdown(f"<div style='{FS};font-weight:700;color:#6b7280;"
                     f"padding:6px 0 4px;border-bottom:2px solid #e2e8f0'>{txt}</div>",
                     unsafe_allow_html=True)
@@ -1462,26 +1480,24 @@ else:
         rc = st.columns(CW)
         col_offset = 0
 
-        # ── 벌크 체크박스 (콜백 방식 — value= 파라미터 없이 세션이 위젯 상태를 직접 관리) ──
-        if st.session_state.bulk_mode:
-            row_id = int(row["id"])
-            chk_key = f"chk_{row_id}"
+        # ── 행 체크박스 (항상 표시, 콜백 방식) ──
+        row_id  = int(row["id"])
+        chk_key = f"chk_{row_id}"
 
-            def _toggle_chk(rid=row_id, k=chk_key):
-                if st.session_state.get(k, False):
-                    st.session_state.bulk_selected.add(rid)
-                else:
-                    st.session_state.bulk_selected.discard(rid)
+        def _toggle_chk(rid=row_id, k=chk_key):
+            if st.session_state.get(k, False):
+                st.session_state.bulk_selected.add(rid)
+            else:
+                st.session_state.bulk_selected.discard(rid)
 
-            # 세션에 키가 없을 때만 초기값 설정 (이후엔 위젯 자체가 상태 보유)
-            if chk_key not in st.session_state:
-                st.session_state[chk_key] = row_id in st.session_state.bulk_selected
+        if chk_key not in st.session_state:
+            st.session_state[chk_key] = row_id in st.session_state.bulk_selected
 
-            with rc[0]:
-                st.checkbox("", key=chk_key,
-                            label_visibility="collapsed",
-                            on_change=_toggle_chk)
-            col_offset = 1
+        with rc[0]:
+            st.checkbox("", key=chk_key,
+                        label_visibility="collapsed",
+                        on_change=_toggle_chk)
+        col_offset = 1
 
         memo_txt  = str(row.get("memo","") or "").strip()
         memo_disp = (memo_txt[:20]+"…") if len(memo_txt)>20 else (memo_txt or "—")
