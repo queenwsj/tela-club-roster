@@ -147,8 +147,18 @@ def get_sheet():
     client = gspread.authorize(creds)
     wb     = client.open_by_key(st.secrets["SHEET_ID"])
     sheet  = wb.sheet1
+    # 헤더가 없으면 전체 삽입
     if sheet.row_count == 0 or sheet.cell(1,1).value != "id":
         sheet.insert_row(COLUMNS, 1)
+        return sheet
+    # ── 컬럼 마이그레이션: 기존 시트에 없는 컬럼 자동 추가 ──
+    existing_headers = sheet.row_values(1)
+    missing = [c for c in COLUMNS if c not in existing_headers]
+    if missing:
+        for col_name in missing:
+            next_col = len(existing_headers) + 1
+            sheet.update_cell(1, next_col, col_name)
+            existing_headers.append(col_name)
     return sheet
 
 @st.cache_resource
@@ -176,16 +186,22 @@ def log_audit(action: str, member_id, member_name: str, detail: str = ""):
         pass  # 로그 실패는 조용히 무시
 
 def load_df(include_deleted=False):
-    records = get_sheet().get_all_records(expected_headers=COLUMNS)
+    # expected_headers 없이 로드 → 시트에 컬럼 없어도 오류 없음
+    records = get_sheet().get_all_records()
     if not records:
-        return pd.DataFrame(columns=COLUMNS)
-    df = pd.DataFrame(records)
+        df = pd.DataFrame(columns=COLUMNS)
+    else:
+        df = pd.DataFrame(records)
+        # COLUMNS에 있지만 df에 없는 컬럼은 빈 문자열로 보정
+        for col in COLUMNS:
+            if col not in df.columns:
+                df[col] = ""
+        df = df[COLUMNS]  # 컬럼 순서 통일
     df["id"]         = pd.to_numeric(df["id"],         errors="coerce").fillna(0).astype(int)
     df["birth_year"] = pd.to_numeric(df["birth_year"], errors="coerce")
-    if "deleted_at" not in df.columns:
-        df["deleted_at"] = ""
+    df["deleted_at"] = df["deleted_at"].astype(str).str.strip()
     if not include_deleted:
-        df = df[df["deleted_at"].astype(str).str.strip() == ""]
+        df = df[df["deleted_at"] == ""]
     return df
 
 def save_row(df, row, is_new, action_detail=""):
